@@ -121,3 +121,5 @@ dmlc-core
 ps-lite
 nnvm
 lib
+test.py
+
