@@ -332,7 +332,7 @@ class RNNCell(RecurrentCell):
         return 'rnn'
 
     def generic_forward(self, F, inputs, states, i2h_weight, i2h_bias,
-                       h2h_weight, h2h_bias):
+                        h2h_weight, h2h_bias):
         name = self._curr_prefix
         i2h = F.FullyConnected(data=inputs, weight=i2h_weight, bias=i2h_bias,
                                num_hidden=self._num_hidden,
@@ -387,7 +387,7 @@ class LSTMCell(RecurrentCell):
         return 'lstm'
 
     def generic_forward(self, F, inputs, states, i2h_weight, i2h_bias,
-                       h2h_weight, h2h_bias):
+                        h2h_weight, h2h_bias):
         name = self._curr_prefix
         i2h = F.FullyConnected(data=inputs, weight=i2h_weight, bias=i2h_bias,
                                num_hidden=self._num_hidden*4,
@@ -449,7 +449,7 @@ class GRUCell(RecurrentCell):
         return 'gru'
 
     def generic_forward(self, F, inputs, states, i2h_weight, i2h_bias,
-                       h2h_weight, h2h_bias):
+                        h2h_weight, h2h_bias):
         # pylint: disable=too-many-locals
         name = self._curr_prefix
         prev_state_h = states[0]
