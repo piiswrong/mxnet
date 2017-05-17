@@ -800,8 +800,9 @@ class ModifierCell(RecurrentCell):
     """
     def __init__(self, base_cell):
         super(ModifierCell, self).__init__()
-        base_cell._modified = True
-        self.base_cell = base_cell
+        with self.scope:
+            base_cell._modified = True
+            self.base_cell = base_cell
 
     @property
     def params(self):
@@ -883,9 +884,9 @@ class ResidualCell(ModifierCell):
     def __init__(self, base_cell):
         super(ResidualCell, self).__init__(base_cell)
 
-    def __call__(self, inputs, states):
+    def generic_forward(self, F, inputs, states):
         output, states = self.base_cell(inputs, states)
-        output = symbol.elemwise_add(output, inputs, name="%s_plus_residual" % output.name)
+        output = F.elemwise_add(output, inputs, name="%s_plus_residual" % output.name)
         return output, states
 
 
