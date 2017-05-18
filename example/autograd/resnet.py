@@ -8,7 +8,6 @@ from mxnet.contrib import nn
 from mxnet.contrib import autograd as ag
 from data import *
 
-batch_size = 32
 
 def conv3x3(filters, stride, in_filters):
     return nn.Conv2D(filters, kernel_size=3, strides=stride, padding=1,
@@ -43,7 +42,7 @@ class BasicBlock(nn.Layer):
 
         return x + residual
 
-class BottleneckV1(nn.SimpleLayer):
+class BottleneckV1(nn.Layer):
     def __init__(self, filters, stride, downsample=False, in_filters=0,
                  prefix=None, params=None):
         super(BottleneckV1, self).__init__(prefix=prefix, params=params)
@@ -60,31 +59,24 @@ class BottleneckV1(nn.SimpleLayer):
         else:
             self.downsample = None
 
-    def simple_forward(self, domain, x):
-        print('start bottleneck')
+    def generic_forward(self, domain, x):
         residual = x
 
         x = self.conv1(x)
         x = self.bn1(x)
         x = domain.Activation(x, act_type='relu')
-        print(x)
 
         x = self.conv2(x)
         x = self.bn2(x)
         x = domain.Activation(x, act_type='relu')
-        print(x)
 
         x = self.conv3(x)
         x = self.bn3(x)
-        print(x)
 
         if self.downsample:
             residual = self.downsample(residual)
-            print('downsample')
-            print(residual)
 
-        x += residual
-        print(x)
+        out = x + residual
 
         x = domain.Activation(x, act_type='relu')
         return x
@@ -229,37 +221,10 @@ def resnet18_cifar(classes):
 def resnet50v1_imagenet(classes):
     return ResnetV1(BottleneckV1, classes, [3, 4, 6, 3], [64, 256, 512, 1024, 2048], False)
 
-net = resnet50v1_imagenet(10)
-
-class DummyIter(mx.io.DataIter):
-    "A dummy iterator that always return the same batch, used for speed testing"
-    def __init__(self, real_iter):
-        super(DummyIter, self).__init__()
-        self.real_iter = real_iter
-        self.provide_data = real_iter.provide_data
-        self.provide_label = real_iter.provide_label
-        self.batch_size = real_iter.batch_size
-
-        for batch in real_iter:
-            self.the_batch = batch
-            print(batch)
-            break
-
-    def __iter__(self):
-        return self
-
-    def next(self):
-        return self.the_batch
-
 #train_data, val_data = cifar10_iterator(256, (3, 16, 16))
-
-def resnet50_imagenet(classes):
-    return Resnet(Bottleneck, classes, [3, 4, 6, 3], [64, 256, 512, 1024, 2048], False)
-
-net = resnet50_imagenet(1000)
-batch_size = 32*8
-train_data, val_data = dummy_iterator(batch_size, (3, 224, 224))
-
+train_data = None
+test_data = None
+net = resnet50v1_imagenet(1000)
 
 def test(ctx):
     metric = mx.metric.Accuracy()
@@ -278,6 +243,7 @@ def test(ctx):
 def train(epoch, ctx):
     if isinstance(ctx, mx.Context):
         ctx = [ctx]
+    print(ctx)
     net.params.initialize(mx.init.Xavier(magnitude=2.24), ctx=ctx)
     optim = nn.Optim(net.params, 'sgd', {'learning_rate': 0.1})
     metric = mx.metric.Accuracy()
@@ -298,14 +264,14 @@ def train(epoch, ctx):
                     outputs.append(z)
             optim.step(batch.data[0].shape[0])
             metric.update(label, outputs)
-            print batch_size/(time.time()-btic)
+            print 'speed: {} samples/s'.format(train_data.batch_size/(time.time()-btic))
             btic = time.time()
 
         name, acc = metric.get()
         metric.reset()
         print 'training acc at epoch %d: %s=%f'%(i, name, acc)
         print 'time: %f'%(time.time()-tic)
-        print 'speed: %f'%(100*train_data.batch_size/(time.time()-tic))
+        print 'speed: %f'%(epoch*train_data.batch_size/(time.time()-tic))
         test(ctx)
 
     net.params.save('mnist.params')
