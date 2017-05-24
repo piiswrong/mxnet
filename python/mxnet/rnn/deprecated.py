@@ -45,19 +45,15 @@ class RNNParams(object):
     Parameters
     ----------
     prefix : str
-        All variables' name created by this container will
-        be prepended with prefix
+        Names of all variables created by this container will
+        be prepended with prefix.
     """
     def __init__(self, prefix=''):
-        warnings.warn(
-            "RNNParams and BaseRNNCell has been deprecated. "
-            "Please use ParameterDict and RecurrentCell instead. "
-            "The new interface supports both symbolic and imperative API.")
         self._prefix = prefix
         self._params = {}
 
     def get(self, name, **kwargs):
-        """Get a variable with name or create a new one if missing.
+        """Get the variable given a name if one exists or create a new one if missing.
 
         Parameters
         ----------
@@ -106,21 +102,30 @@ class BaseRNNCell(object):
         self._counter = -1
 
     def __call__(self, inputs, states):
-        """Construct symbol for one step of RNN.
+        """Unroll the RNN for one time step.
 
         Parameters
         ----------
         inputs : sym.Variable
             input symbol, 2D, batch * num_units
-        states : sym.Variable
-            state from previous step or begin_state().
+        states : list of sym.Variable
+            RNN state from previous step or the output of begin_state().
 
         Returns
         -------
         output : Symbol
-            output symbol
-        states : Symbol
-            state to next step of RNN.
+            Symbol corresponding to the output from the RNN when unrolling
+            for a single time step.
+        states : nested list of Symbol
+            The new state of this RNN after this unrolling.
+            The type of this symbol is same as the output of begin_state().
+            This can be used as input state to the next time step
+            of this RNN.
+
+        See Also
+        --------
+        begin_state: This function can provide the states for the first time step.
+        unroll: This function unrolls an RNN for a given number of (>=1) time steps.
         """
         raise NotImplementedError()
 

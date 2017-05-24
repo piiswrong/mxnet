@@ -91,12 +91,13 @@ class RecurrentCell(Layer):
 
     Parameters
     ----------
-    prefix : str
-        prefix for name of layers
-        (and name of weight if params is None)
-    params : RNNParams or None
-        container for weight sharing between cells.
-        created if None.
+    prefix : str, optional
+        Prefix for names of layers
+        (this prefix is also used for names of weights if `params` is None
+        i.e. if `params` are being created and not reused)
+    params : RNNParams or None, optional
+        Container for weight sharing between cells.
+        A new RNNParams container is created if `params` is None.
     """
     def __init__(self, prefix=None, params=None):
         super(RecurrentCell, self).__init__(prefix=prefix, params=params)
@@ -104,7 +105,7 @@ class RecurrentCell(Layer):
         self.reset()
 
     def reset(self):
-        """Reset before re-using the cell for another graph"""
+        """Reset before re-using the cell for another graph."""
         self._init_counter = -1
         self._counter = -1
 
@@ -150,7 +151,7 @@ class RecurrentCell(Layer):
         Returns
         -------
         states : nested list of Symbol
-            starting states for first RNN step
+            Starting states for the first RNN step.
         """
         assert not self._modified, \
             "After applying modifier cells (e.g. ZoneoutCell) the base " \
@@ -169,19 +170,29 @@ class RecurrentCell(Layer):
 
     def unpack_weights(self, args):
         """Unpack fused weight matrices into separate
-        weight matrices
+        weight matrices.
+
+        For example, say you use a module object `mod` to run a network that has an lstm cell.
+        In `mod.get_params()[0]`, the lstm parameters are all represented as a single big vector.
+        `cell.unpack_weights(mod.get_params()[0])` will unpack this vector into a dictionary of
+        more readable lstm parameters - c, f, i, o gates for i2h (input to hidden) and
+        h2h (hidden to hidden) weights.
 
         Parameters
         ----------
         args : dict of str -> NDArray
-            dictionary containing packed weights.
-            usually from Module.get_output()
+            Dictionary containing packed weights.
+            usually from `Module.get_params()[0]`.
 
         Returns
         -------
         args : dict of str -> NDArray
-            dictionary with weights associated to
-            this cell unpacked.
+            Dictionary with unpacked weights associated with
+            this cell.
+
+        See Also
+        --------
+        pack_weights: Performs the reverse operation of this function.
         """
         args = args.copy()
         if not self._gate_names:
@@ -198,19 +209,19 @@ class RecurrentCell(Layer):
         return args
 
     def pack_weights(self, args):
-        """Pack separate weight matrices into fused
+        """Pack separate weight matrices into a single packed
         weight.
 
         Parameters
         ----------
         args : dict of str -> NDArray
-            dictionary containing unpacked weights.
+            Dictionary containing unpacked weights.
 
         Returns
         -------
         args : dict of str -> NDArray
-            dictionary with weights associated to
-            this cell packed.
+            Dictionary with packed weights associated with
+            this cell.
         """
         args = args.copy()
         if not self._gate_names:
@@ -235,22 +246,22 @@ class RecurrentCell(Layer):
         length : int
             number of steps to unroll
         inputs : Symbol, list of Symbol, or None
-            if inputs is a single Symbol (usually the output
+            If `inputs` is a single Symbol (usually the output
             of Embedding symbol), it should have shape
             (batch_size, length, ...) if layout == 'NTC',
             or (length, batch_size, ...) if layout == 'TNC'.
 
-            If inputs is a list of symbols (usually output of
+            If `inputs` is a list of symbols (usually output of
             previous unroll), they should all have shape
             (batch_size, ...).
-        begin_state : nested list of Symbol
-            input states. Created by begin_state()
-            or output state of another cell. Created
-            from begin_state() if None.
-        layout : str
-            layout of input symbol. Only used if inputs
+        begin_state : nested list of Symbol, optional
+            Input states created by `begin_state()`
+            or output state of another cell.
+            Created from `begin_state()` if None.
+        layout : str, optional
+            `layout` of input symbol. Only used if inputs
             is a single Symbol.
-        merge_outputs : bool
+        merge_outputs : bool, optional
             If False, return outputs as a list of Symbols.
             If True, concatenate output across time steps
             and return a single symbol with shape
@@ -260,10 +271,14 @@ class RecurrentCell(Layer):
 
         Returns
         -------
-        outputs : list of Symbol
-            output symbols.
-        states : Symbol or nested list of Symbol
-            has the same structure as begin_state()
+        outputs : list of Symbol or Symbol
+            Symbol (if `merge_outputs` is True) or list of Symbols
+            (if `merge_outputs` is False) corresponding to the output from
+            the RNN from this unrolling.
+
+        states : list of Symbol
+            The new state of this RNN after this unrolling.
+            The type of this symbol is same as the output of begin_state().
         """
         self.reset()
 
@@ -288,14 +303,40 @@ class RecurrentCell(Layer):
         else:
             return activation(inputs, **kwargs)
 
-    def __call__(self, inputs, states):
+    def forward(self, inputs, states):
+        """Unroll the recurrent cell for one time step.
+
+        Parameters
+        ----------
+        inputs : sym.Variable
+            input symbol, 2D, batch_size * num_units
+        states : list of sym.Variable
+            RNN state from previous step or the output of begin_state().
+
+        Returns
+        -------
+        output : Symbol
+            Symbol corresponding to the output from the RNN when unrolling
+            for a single time step.
+        states : list of Symbol
+            The new state of this RNN after this unrolling.
+            The type of this symbol is same as the output of begin_state().
+            This can be used as input state to the next time step
+            of this RNN.
+
+        See Also
+        --------
+        begin_state: This function can provide the states for the first time step.
+        unroll: This function unrolls an RNN for a given number of (>=1) time steps.
+        """
         # pylint: disable= arguments-differ
         self._counter += 1
-        return super(RecurrentCell, self).__call__(inputs, states)
+        return super(RecurrentCell, self).forward(inputs, states)
+
 
 
 class RNNCell(RecurrentCell):
-    """Simple recurrent neural network cell
+    """Simple recurrent neural network cell.
 
     Parameters
     ----------
@@ -681,16 +722,9 @@ class FusedRNNCell(RecurrentCell):
 
 
 class SequentialRNNCell(RecurrentCell):
-    """Sequantially stacking multiple RNN cells
-
-    Parameters
-    ----------
-    params : RNNParams or None
-        container for weight sharing between cells.
-        created if None.
-    """
-    def __init__(self, params=None):
-        super(SequentialRNNCell, self).__init__(prefix='', params=params)
+    """Sequantially stacking multiple RNN cells."""
+    def __init__(self):
+        super(SequentialRNNCell, self).__init__(prefix='', params=None)
 
     def add(self, cell):
         """Append a cell into the stack.
@@ -799,10 +833,9 @@ class ModifierCell(RecurrentCell):
     should be used instead.
     """
     def __init__(self, base_cell):
-        super(ModifierCell, self).__init__()
-        with self.scope:
-            base_cell._modified = True
-            self.base_cell = base_cell
+        super(ModifierCell, self).__init__(prefix=None, params=None)
+        base_cell._modified = True
+        self.base_cell = base_cell
 
     @property
     def params(self):
@@ -832,7 +865,7 @@ class ModifierCell(RecurrentCell):
 
 
 class ZoneoutCell(ModifierCell):
-    """Apply Zoneout on base cell"""
+    """Apply Zoneout on base cell."""
     def __init__(self, base_cell, zoneout_outputs=0., zoneout_states=0.):
         assert not isinstance(base_cell, FusedRNNCell), \
             "FusedRNNCell doesn't support zoneout. " \
@@ -891,7 +924,7 @@ class ResidualCell(ModifierCell):
 
 
 class BidirectionalCell(RecurrentCell):
-    """Bidirectional RNN cell
+    """Bidirectional RNN cell.
 
     Parameters
     ----------
@@ -900,12 +933,11 @@ class BidirectionalCell(RecurrentCell):
     r_cell : RecurrentCell
         cell for backward unrolling
     """
-    def __init__(self, l_cell, r_cell, prefix=None, params=None, output_prefix=None):
-        if output_prefix:
-            prefix = output_prefix
-        super(BidirectionalCell, self).__init__(prefix=prefix, params=params)
+    def __init__(self, l_cell, r_cell, output_prefix='bi_'):
+        super(BidirectionalCell, self).__init__(prefix='', params=None)
         self.register_sublayer(l_cell)
         self.register_sublayer(r_cell)
+        self._output_prefix = output_prefix
 
     def unpack_weights(self, args):
         return _cells_unpack_weights(self._children, args)
@@ -918,9 +950,6 @@ class BidirectionalCell(RecurrentCell):
 
     def state_info(self, batch_size=0):
         return _cells_state_info(self._children, batch_size)
-
-    def _alias(self):
-        return 'bi'
 
     def begin_state(self, **kwargs):
         assert not self._modified, \
@@ -952,9 +981,9 @@ class BidirectionalCell(RecurrentCell):
 
         if merge_outputs:
             r_outputs = F.reverse(r_outputs, axis=axis)
-            outputs = F.concat(l_outputs, r_outputs, dim=2, name='%sout'%self.prefix)
+            outputs = F.concat(l_outputs, r_outputs, dim=2, name='%sout'%self._output_prefix)
         else:
-            outputs = [F.concat(l_o, r_o, dim=1, name='%st%d'%(self.prefix, i))
+            outputs = [F.concat(l_o, r_o, dim=1, name='%st%d'%(self._output_prefix, i))
                        for i, (l_o, r_o) in enumerate(zip(l_outputs, reversed(r_outputs)))]
 
         states = [l_states, r_states]

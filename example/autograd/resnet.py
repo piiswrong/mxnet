@@ -1,9 +1,7 @@
 from __future__ import division
 
 import time
-import sys
 import mxnet as mx
-import numpy as np
 from mxnet.contrib import nn
 from mxnet.contrib import autograd as ag
 from data import *
@@ -217,6 +215,8 @@ class ResnetV1(nn.Layer):
 
 def resnet18_cifar(classes):
     return Resnet(BasicBlock, classes, [2, 2, 2], [16, 16, 32, 64], True)
+def resnet50_imagenet(classes):
+    return Resnet(Bottleneck, classes, [3, 4, 6, 3], [64, 256, 512, 1024, 2048], False)
 def resnet50v1_imagenet(classes):
     return ResnetV1(BottleneckV1, classes, [3, 4, 6, 3], [64, 256, 512, 1024, 2048], False)
 
@@ -235,7 +235,6 @@ def test(ctx):
         for x in data:
             outputs.append(net(x))
         metric.update(label, outputs)
-        break
     print 'validation acc: %s=%f'%metric.get()
 
 
@@ -262,8 +261,7 @@ def train(epoch, ctx):
                     outputs.append(z)
             optim.step(batch.data[0].shape[0])
             metric.update(label, outputs)
-            if train_data._batches != train_data.batches - 1:
-                print 'speed: {} samples/s'.format(train_data.label_shape[0]/(time.time()-btic))
+            print 'speed: {} samples/s'.format(train_data.label_shape[0]/(time.time()-btic))
             btic = time.time()
 
         name, acc = metric.get()
