@@ -67,7 +67,7 @@ class Optim(object):
                 kvstore.set_optimizer(self._optimizer)
 
     def step(self, batch_size, ignore_stale_grad=False):
-    """Make one step of parameter update. Should be called after
+        """Make one step of parameter update. Should be called after
         autograd.compute_gradient and outside of train_section() scope.
 
         Parameters
