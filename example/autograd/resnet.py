@@ -15,30 +15,33 @@ class BasicBlockV1(nn.Layer):
     def __init__(self, filters, stride, downsample=False, in_filters=0, **kwargs):
         super(BasicBlockV1, self).__init__(**kwargs)
         with self.scope:
-            self.bn1 = nn.BatchNorm(num_features=in_filters)
             self.conv1 = conv3x3(filters, stride, in_filters)
-            self.bn2 = nn.BatchNorm(num_features=filters)
+            self.bn1 = nn.BatchNorm(num_features=in_filters)
             self.conv2 = conv3x3(filters, 1, filters)
+            self.bn2 = nn.BatchNorm(num_features=filters)
             if downsample:
-                self.downsample = nn.Conv2D(filters, 1, stride, use_bias=False,
-                                            in_filters=in_filters)
-            else:
-                self.downsample = None
+                self.conv_ds = nn.Conv2D(filters, kernel_size=1, strides=stride, use_bias=False, in_filters=in_filters)
+                self.bn_ds = nn.BatchNorm(num_features=filters)
+            self.downsample = downsample
 
     def generic_forward(self, domain, x):
-        if not self.downsample:
-            residual = x
-        x = self.bn1(x)
-        x = domain.Activation(x, act_type='relu')
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = domain.Activation(x, act_type='relu')
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
         if self.downsample:
-            residual = self.downsample(x)
-        x = self.conv1(x)
+            residual = self.conv_ds(x)
+            residual = self.bn_ds(residual)
 
-        x = self.bn2(x)
-        x = domain.Activation(x, act_type='relu')
-        x = self.conv2(x)
+        out = residual + out
+        out = domain.Activation(out, act_type='relu')
 
-        return x + residual
+        return out
 
 
 class BottleneckV1(nn.Layer):
@@ -74,10 +77,10 @@ class BottleneckV1(nn.Layer):
             residual = self.conv_ds(x)
             residual = self.bn_ds(residual)
 
-        out = x + residual
+        out = out + residual
 
-        x = domain.Activation(x, act_type='relu')
-        return x
+        out = domain.Activation(out, act_type='relu')
+        return out
 
 
 class ResnetV1(nn.Layer):
