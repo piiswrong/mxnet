@@ -305,7 +305,7 @@ def train(epoch, ctx):
         metric.reset()
         print 'training acc at epoch %d: %s=%f'%(i, name, acc)
         print 'time: %f'%(time.time()-tic)
-        print 'speed: %f'%(epoch*train_data.label_shape[0]/(time.time()-tic))
+        print 'speed: %f'%(train_data.batches*train_data.label_shape[0]/(time.time()-tic))
         test(ctx)
 
     net.params.save('mnist.params')
