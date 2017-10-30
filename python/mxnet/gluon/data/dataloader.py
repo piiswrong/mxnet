@@ -39,6 +39,7 @@ def reduce_ndarray(data):
     """Reduce ndarray to shared memory handle"""
     return rebuild_ndarray, data._to_shared_mem()
 
+
 ForkingPickler.register(nd.NDArray, reduce_ndarray)
 
 
@@ -65,7 +66,7 @@ class ConnectionWrapper(object):
         return getattr(self.conn, name)
 
 
-class SimpleQueue(multiprocessing.queues.SimpleQueue):
+class SimpleQueue(multiprocessing.queues.Queue):
     def __init__(self, *args, **kwargs):
         super(SimpleQueue, self).__init__(*args, ctx=multiprocessing.get_context(), **kwargs)
 
@@ -137,6 +138,7 @@ class DataLoader(object):
         A sampler that returns mini-batches. Do not specify batch_size,
         shuffle, sampler, and last_batch if batch_sampler is specified.
     """
+
     def __init__(self, dataset, batch_size=None, shuffle=False, sampler=None,
                  last_batch=None, batch_sampler=None, batchify_fn=None,
                  num_workers=0):
@@ -144,7 +146,7 @@ class DataLoader(object):
 
         if batch_sampler is None:
             if batch_size is None:
-                raise ValueError("batch_size must be specified unless " \
+                raise ValueError("batch_size must be specified unless "
                                  "batch_sampler is specified")
             if sampler is None:
                 if shuffle:
@@ -157,8 +159,8 @@ class DataLoader(object):
             batch_sampler = _sampler.BatchSampler(
                 sampler, batch_size, last_batch if last_batch else 'keep')
         elif batch_size is not None or shuffle or sampler is not None or \
-                last_batch is not None:
-            raise ValueError("batch_size, shuffle, sampler and last_batch must " \
+                        last_batch is not None:
+            raise ValueError("batch_size, shuffle, sampler and last_batch must "
                              "not be specified if batch_sampler is specified.")
 
         self._batch_sampler = batch_sampler
@@ -177,8 +179,8 @@ class DataLoader(object):
                 yield self._batchify_fn([self._dataset[idx] for idx in batch])
             return
 
-        key_queue = SimpleQueue()
-        data_queue = SimpleQueue()
+        key_queue = SimpleQueue(maxsize=65535)
+        data_queue = SimpleQueue(maxsize=65535)
 
         workers = []
         for _ in range(self._num_workers):
@@ -192,8 +194,6 @@ class DataLoader(object):
         for idx, batch in enumerate(self._batch_sampler):
             key_queue.put((idx, batch))
 
-        for i in range(self._num_workers):
-            key_queue.put((None, None))
 
         data_buffer = {}
         curr_idx = 0
@@ -203,6 +203,9 @@ class DataLoader(object):
             while curr_idx in data_buffer:
                 yield data_buffer.pop(curr_idx)
                 curr_idx += 1
+        
+        for i in range(self._num_workers):
+            key_queue.put((None, None))
 
         for worker in workers:
             worker.join()
