@@ -34,12 +34,23 @@
 
 #include "./ndarray.h"
 
+namespace std {
+template<>
+struct hash<mxnet::Context> {
+  size_t operator()(const mxnet::Context& ctx) const {
+    return (static_cast<size_t>(ctx.dev_type) << 32) | ctx.dev_id;
+  }
+};
+}
+
 namespace mxnet {
 /*! \brief CachedOp Parameters */
 struct CachedOpParam : public dmlc::Parameter<CachedOpParam> {
   uint32_t inline_limit;
   uint32_t forward_bulk_size;
   uint32_t backward_bulk_size;
+  bool static_memory;
+  bool enable_backward;
   DMLC_DECLARE_PARAMETER(CachedOpParam) {
     DMLC_DECLARE_FIELD(inline_limit)
     .set_default(2)
@@ -50,6 +61,12 @@ struct CachedOpParam : public dmlc::Parameter<CachedOpParam> {
     DMLC_DECLARE_FIELD(backward_bulk_size)
     .set_default(dmlc::GetEnv("MXNET_EXEC_BULK_EXEC_MAX_NODE_TRAIN", 15))
     .describe("Segment size of bulk execution during backward pass.");
+    DMLC_DECLARE_FIELD(static_memory)
+    .set_default(false)
+    .describe("Whether to pre-allocate memory.");
+    DMLC_DECLARE_FIELD(enable_backward)
+    .set_default(true)
+    .describe("Whether to calculating gradient.");
   }
 };
 /*! \brief runtime functions for NDArray */
@@ -96,47 +113,74 @@ class Imperative {
   };
   class CachedOp {
    public:
-    CachedOp(const nnvm::Symbol& sym,
-             const std::vector<std::pair<std::string, std::string> >& kwargs);
-    uint32_t num_inputs() {
+    virtual ~CachedOp() {}
+    virtual uint32_t num_inputs() = 0;
+    virtual uint32_t num_outputs() = 0;
+    virtual const std::unordered_set<uint32_t>& mutable_input_nodes() = 0;
+    virtual uint32_t num_backward_inputs() = 0;
+    virtual std::vector<nnvm::NodeEntry> Gradient(
+        const nnvm::NodePtr& node,
+        const std::vector<nnvm::NodeEntry>& ograds) = 0;
+    virtual void Forward(
+        const std::shared_ptr<CachedOp>& op_ptr,
+        const std::vector<NDArray*>& inputs,
+        const std::vector<NDArray*>& outputs) = 0;
+    virtual void Backward(
+        const bool retain_graph,
+        const OpStatePtr& state,
+        const std::vector<NDArray*>& inputs,
+        const std::vector<OpReqType>& reqs,
+        const std::vector<NDArray*>& outputs) = 0;
+  };
+  class DynamicCachedOp : public CachedOp {
+   public:
+    DynamicCachedOp(
+        const nnvm::Symbol& sym,
+        const std::vector<std::pair<std::string, std::string> >& kwargs);
+    ~DynamicCachedOp() {}
+    uint32_t num_inputs() override {
       return fwd_graph_.indexed_graph().input_nodes().size();
     }
-    uint32_t num_outputs() {
+    uint32_t num_outputs() override {
       return fwd_graph_.outputs.size();
     }
-    uint32_t num_backward_inputs() {
-      return bwd_ograd_dep_.size() + bwd_in_dep_.size() + bwd_out_dep_.size();
-    }
-    std::vector<bool>& save_inputs() {
-      return save_inputs_;
-    }
-    std::vector<bool>& save_outputs() {
-      return save_outputs_;
-    }
-    const std::unordered_set<uint32_t>& mutable_input_nodes() {
+    const std::unordered_set<uint32_t>& mutable_input_nodes() override {
       return fwd_graph_.indexed_graph().mutable_input_nodes();
     }
-    nnvm::Graph GetForwardGraph(const bool recording,
-                                const std::vector<NDArray*>& inputs);
-    nnvm::Graph GetBackwardGraph(const OpStatePtr& state,
-                                 const std::vector<OpReqType>& reqs,
-                                 const std::vector<NDArray*>& inputs);
-    std::vector<nnvm::NodeEntry> Gradient(const nnvm::NodePtr& node,
-                                          const std::vector<nnvm::NodeEntry>& ograds);
+    uint32_t num_backward_inputs() override {
+      return bwd_ograd_dep_.size() + bwd_in_dep_.size() + bwd_out_dep_.size();
+    }
+    std::vector<nnvm::NodeEntry> Gradient(
+        const nnvm::NodePtr& node,
+        const std::vector<nnvm::NodeEntry>& ograds) override;
     void Forward(const std::shared_ptr<CachedOp>& op_ptr,
                  const std::vector<NDArray*>& inputs,
-                 const std::vector<NDArray*>& outputs);
+                 const std::vector<NDArray*>& outputs) override;
     void Backward(const bool retain_graph,
                   const OpStatePtr& state,
                   const std::vector<NDArray*>& inputs,
                   const std::vector<OpReqType>& reqs,
-                  const std::vector<NDArray*>& outputs);
+                  const std::vector<NDArray*>& outputs) override;
 
    private:
     struct CachedOpState {
       std::vector<NDArray> buff;
       std::vector<OpStatePtr> states;
     };
+
+    std::vector<bool>& save_inputs() {
+      return save_inputs_;
+    }
+    std::vector<bool>& save_outputs() {
+      return save_outputs_;
+    }
+
+    nnvm::Graph GetForwardGraph(const bool recording,
+                                const std::vector<NDArray*>& inputs);
+    nnvm::Graph GetBackwardGraph(const OpStatePtr& state,
+                                 const std::vector<OpReqType>& reqs,
+                                 const std::vector<NDArray*>& inputs);
+
     std::mutex mutex_;
     CachedOpParam param_;
     nnvm::Graph fwd_graph_;
@@ -148,6 +192,77 @@ class Imperative {
     std::vector<uint32_t> bwd_in_dep_, bwd_out_dep_, bwd_ograd_dep_;
     std::vector<uint32_t> bwd_input_eid_;
     std::vector<bool> save_inputs_, save_outputs_;
+  };
+  class StaticCachedOp : public CachedOp {
+   public:
+    StaticCachedOp(
+        const nnvm::Symbol& sym,
+        const std::vector<std::pair<std::string, std::string> >& kwargs,
+        const std::vector<Context> contexts,
+        const std::vector<std::string> input_names,
+        const std::unordered_map<std::string, std::vector<NDArray> >& parameters);
+    ~StaticCachedOp() {}
+    uint32_t num_inputs() override {
+      return fwd_graph_.indexed_graph().input_nodes().size();
+    }
+    uint32_t num_outputs() override {
+      return fwd_graph_.outputs.size();
+    }
+    const std::unordered_set<uint32_t>& mutable_input_nodes() override {
+      return fwd_graph_.indexed_graph().mutable_input_nodes();
+    }
+    uint32_t num_backward_inputs() override {
+      LOG(FATAL) << "Not implemented.";
+    }
+    std::vector<nnvm::NodeEntry> Gradient(
+        const nnvm::NodePtr& node,
+        const std::vector<nnvm::NodeEntry>& ograds) override {
+      LOG(FATAL) << "Not implemented.";
+    }
+    void Forward(
+        const std::shared_ptr<CachedOp>& op_ptr,
+        const std::vector<NDArray*>& inputs,
+        const std::vector<NDArray*>& outputs) override;
+
+    void Backward(const bool retain_graph,
+         const OpStatePtr& state,
+         const std::vector<NDArray*>& inputs,
+         const std::vector<OpReqType>& reqs,
+         const std::vector<NDArray*>& outputs) override {
+      LOG(FATAL) << "Not implemented.";
+    }
+
+   private:
+
+    struct StaticState {
+      std::mutex mutex;
+      Context context;
+      nnvm::Graph graph;
+      std::vector<std::pair<index_t, NDArray> > params;
+
+      bool initialized = false;
+      std::vector<NDArray> buff;
+      std::vector<NDArray*> arrays;
+      std::vector<OpReqType> array_reqs;
+      std::vector<Engine::OprHandle> oprs;
+    };
+
+    bool SetupGraph(
+        nnvm::Graph *graph,
+        const bool enable_backward,
+        const std::vector<NDArray*>& inputs);
+
+    void SetupState(
+        const std::shared_ptr<StaticState>& state,
+        const std::vector<NDArray*>& inputs,
+        const std::vector<NDArray*>& outputs);
+
+    CachedOpParam param_;
+    std::unordered_map<Context, std::shared_ptr<StaticState> > static_states_;
+    // Changes after constructor
+    nnvm::Graph fwd_graph_;
+    // Doesn't change after constructor
+    std::vector<uint32_t> input_idx_;
   };
   /*! \brief whether operator recording is on. */
   bool is_training() const {

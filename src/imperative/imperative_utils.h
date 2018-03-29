@@ -713,8 +713,8 @@ inline MemoryPlanVector PlanMemory(
   const auto& dtypes = g.GetAttr<DTypeVector>("dtype");
   const auto& shapes = g.GetAttr<ShapeVector>("shape");
   const auto& stypes = g.GetAttr<StorageTypeVector>("storage_type");
-  auto storage_ids = g.MoveCopyAttr<StorageVector>("storage_id");
-  auto storage_inplace = g.MoveCopyAttr<std::vector<int> >("storage_inplace_index");
+  const auto& storage_ids = g.GetAttr<StorageVector>("storage_id");
+  const auto& storage_inplace = g.GetAttr<std::vector<int> >("storage_inplace_index");
   uint32_t entry_start = entry_range.first;
   uint32_t entry_end =
       entry_range.second > entry_start ? entry_range.second : idx.num_node_entries();
@@ -753,9 +753,10 @@ inline void AllocateMemory(const nnvm::Graph& g,
   const auto& dtypes = g.GetAttr<DTypeVector>("dtype");
   const auto& shapes = g.GetAttr<ShapeVector>("shape");
   const auto& stypes = g.GetAttr<StorageTypeVector>("storage_type");
+  const auto& storage_ids = g.GetAttr<nnvm::StorageVector>("storage_id");
 
   for (uint32_t i = entry_start; i < entry_end; ++i) {
-    if (!arrays[i]->is_none()) continue;
+    if (storage_ids[i] == exec::kExternalStorageID || !arrays[i]->is_none()) continue;
     if (stypes[i] == kDefaultStorage) {
       if (mem_plan[i].sid == i) {
         CHECK_GT(mem_plan[i].size, 0);

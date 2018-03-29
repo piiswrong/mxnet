@@ -981,6 +981,22 @@ MXNET_DLL int MXCreateCachedOpEx(SymbolHandle handle,
                                  const char** vals,
                                  CachedOpHandle *out);
 /*!
+ * \brief create cached operator
+ */
+MXNET_DLL int MXCreateStaticCachedOp(SymbolHandle handle,
+                                     int num_params,
+                                     const char** keys,
+                                     const char** vals,
+                                     int num_contexts,
+                                     const int* dev_types,
+                                     const int* dev_ids,
+                                     int num_inputs,
+                                     const char** input_names,
+                                     int num_parameters,
+                                     const char** parameter_names,
+                                     NDArrayHandle* parameters,
+                                     CachedOpHandle *out);
+/*!
  * \brief free cached operator
  */
 MXNET_DLL int MXFreeCachedOp(CachedOpHandle handle);

@@ -24,7 +24,7 @@ namespace mxnet {
 
 DMLC_REGISTER_PARAMETER(CachedOpParam);
 
-Imperative::CachedOp::CachedOp(
+Imperative::DynamicCachedOp::DynamicCachedOp(
     const nnvm::Symbol& sym,
     const std::vector<std::pair<std::string, std::string> >& kwargs) {
   using namespace nnvm;
@@ -139,7 +139,7 @@ Imperative::CachedOp::CachedOp(
   }
 }
 
-std::vector<nnvm::NodeEntry> Imperative::CachedOp::Gradient(
+std::vector<nnvm::NodeEntry> Imperative::DynamicCachedOp::Gradient(
     const nnvm::NodePtr& node,
     const std::vector<nnvm::NodeEntry>& ograds) {
   using namespace nnvm;
@@ -176,7 +176,7 @@ std::vector<nnvm::NodeEntry> Imperative::CachedOp::Gradient(
   return ret;
 }
 
-nnvm::Graph Imperative::CachedOp::GetForwardGraph(
+nnvm::Graph Imperative::DynamicCachedOp::GetForwardGraph(
     const bool recording, const std::vector<NDArray*>& inputs) {
   using namespace nnvm;
   using namespace imperative;
@@ -230,7 +230,7 @@ nnvm::Graph Imperative::CachedOp::GetForwardGraph(
   return g;
 }
 
-nnvm::Graph Imperative::CachedOp::GetBackwardGraph(
+nnvm::Graph Imperative::DynamicCachedOp::GetBackwardGraph(
     const OpStatePtr& op_state,
     const std::vector<OpReqType>& reqs,
     const std::vector<NDArray*>& inputs) {
@@ -339,7 +339,7 @@ nnvm::Graph Imperative::CachedOp::GetBackwardGraph(
   return g;
 }
 
-void Imperative::CachedOp::Forward(
+void Imperative::DynamicCachedOp::Forward(
     const std::shared_ptr<CachedOp>& op_ptr,
     const std::vector<NDArray*>& inputs,
     const std::vector<NDArray*>& outputs) {
@@ -431,7 +431,7 @@ void Imperative::CachedOp::Forward(
 }
 
 
-void Imperative::CachedOp::Backward(
+void Imperative::DynamicCachedOp::Backward(
     const bool retain_graph,
     const OpStatePtr& state,
     const std::vector<NDArray*>& inputs,

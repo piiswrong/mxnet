@@ -157,7 +157,7 @@ int MXCreateCachedOp(SymbolHandle handle,
 
   API_BEGIN();
   *out = new std::shared_ptr<Imperative::CachedOp>(
-      new Imperative::CachedOp(
+      new Imperative::DynamicCachedOp(
         *sym, std::vector<std::pair<std::string, std::string> >()));
   API_END();
 }
@@ -175,7 +175,49 @@ int MXCreateCachedOpEx(SymbolHandle handle,
     kwargs.push_back({keys[i], vals[i]});
   }
   *out = new std::shared_ptr<Imperative::CachedOp>(
-      new Imperative::CachedOp(*sym, kwargs));
+      new Imperative::DynamicCachedOp(*sym, kwargs));
+  API_END();
+}
+
+int MXCreateStaticCachedOp(SymbolHandle handle,
+                            int num_params,
+                            const char** keys,
+                            const char** vals,
+                            int num_contexts,
+                            const int* dev_types,
+                            const int* dev_ids,
+                            int num_inputs,
+                            const char** input_names,
+                            int num_parameters,
+                            const char** parameter_names,
+                            NDArrayHandle* parameters,
+                            CachedOpHandle *out) {
+  nnvm::Symbol* sym = static_cast<nnvm::Symbol*>(handle);
+
+  API_BEGIN();
+  std::vector<std::pair<std::string, std::string> > kwargs;
+  for (int i = 0; i < num_params; ++i) {
+    kwargs.push_back({keys[i], vals[i]});
+  }
+  std::vector<Context> contexts;
+  for (int i = 0; i < num_contexts; ++i) {
+    contexts.push_back(
+        Context::Create(static_cast<Context::DeviceType>(dev_types[i]), dev_ids[i]));
+  }
+  std::vector<std::string> inputs;
+  for (int i = 0; i < num_inputs; ++i) {
+    inputs.push_back(input_names[i]);
+  }
+  std::unordered_map<std::string, std::vector<NDArray> > params;
+  for (int i = 0; i < num_parameters; ++i) {
+    params[parameter_names[i]] = std::vector<NDArray>();
+    for (int j = 0; j < num_contexts; ++j) {
+      params[parameter_names[i]].emplace_back(
+          *reinterpret_cast<NDArray*>(parameters[i*num_contexts + j]));
+    }
+  }
+  *out = new std::shared_ptr<Imperative::CachedOp>(
+      new Imperative::StaticCachedOp(*sym, kwargs, contexts, inputs, params));
   API_END();
 }
 
