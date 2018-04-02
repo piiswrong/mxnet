@@ -24,7 +24,7 @@ from __future__ import absolute_import as _abs
 import ctypes
 
 from ..base import _LIB
-from ..base import c_str_array, c_handle_array
+from ..base import c_str_array, c_handle_array, c_array
 from ..base import NDArrayHandle, CachedOpHandle
 from ..base import check_call
 
@@ -105,14 +105,36 @@ def _imperative_invoke(handle, ndargs, keys, vals, out):
 class CachedOp(object):
     """Cached operator handle."""
     __slots__ = ["handle"]
-    def __init__(self, sym, flags=()):
+    def __init__(self, sym, flags=(), contexts=None, inputs=None, params=None):
         self.handle = CachedOpHandle()
-        check_call(_LIB.MXCreateCachedOpEx(
-            sym.handle,
-            len(flags),
-            c_str_array([key for key, _ in flags]),
-            c_str_array([str(val) for _, val in flags]),
-            ctypes.byref(self.handle)))
+        if contexts is not None:
+            param_names = []
+            param_arrays = []
+            for name, arrs in params.items():
+                param_names.append(name)
+                param_arrays.extend(arrs)
+
+            check_call(_LIB.MXCreateStaticCachedOp(
+                sym.handle,
+                len(flags),
+                c_str_array([key for key, _ in flags]),
+                c_str_array([str(val) for _, val in flags]),
+                len(contexts),
+                c_array(ctypes.c_int, [i.device_typeid for i in contexts]),
+                c_array(ctypes.c_int, [i.device_id for i in contexts]),
+                len(inputs),
+                c_str_array(inputs),
+                len(params),
+                c_str_array(param_names),
+                c_handle_array(param_arrays),
+                ctypes.byref(self.handle)))
+        else:
+            check_call(_LIB.MXCreateCachedOpEx(
+                sym.handle,
+                len(flags),
+                c_str_array([key for key, _ in flags]),
+                c_str_array([str(val) for _, val in flags]),
+                ctypes.byref(self.handle)))
 
     def __del__(self):
         check_call(_LIB.MXFreeCachedOp(self.handle))

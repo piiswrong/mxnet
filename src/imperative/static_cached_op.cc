@@ -102,6 +102,7 @@ Imperative::StaticCachedOp::StaticCachedOp(
 
   for (const auto& ctx : contexts) {
     static_states_[ctx]->graph = fwd_graph_;
+    static_states_[ctx]->graph.attrs["context"] = std::make_shared<dmlc::any>(std::vector<Context>(idx.num_nodes(), ctx));
   }
 }
 

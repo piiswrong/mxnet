@@ -451,6 +451,7 @@ class HybridBlock(Block):
         self._out_format = None
         self._in_format = None
         self._active = False
+        self._static = False
         self._flags = {}
 
     def __setattr__(self, name, value):
@@ -517,7 +518,37 @@ class HybridBlock(Block):
             for _, i in self.params.items():
                 i._finish_deferred_init()
 
+    def _build_cache_static(self, *args):
+        inputs, out = self._get_graph(*args)
+        input_names = [i.name for i in inputs]
+        try:
+            params = {key: val.list_data() for key, val in self.collect_params().items()}
+        except DeferredInitializationError:
+            self.infer_shape(*args)
+            for _, i in self.collect_params().items():
+                i._finish_deferred_init()
+            params = {key: val.list_data() for key, val in self.collect_params().items()}
+
+        ctxs = self.collect_params().items()[0][1].list_ctx()
+
+        self._cached_op = ndarray.CachedOp(out, self._flags, ctxs, input_names, params)
+
+
+    def _call_cached_op_static(self, *args):
+        if self._cached_op is None:
+            self._build_cache_static(*args)
+
+        args, fmt = _flatten(args)
+        assert fmt == self._in_format, "Invalid input format"
+        out = self._cached_op(*args)
+        if isinstance(out, NDArray):
+            out = [out]
+        return _regroup(out, self._out_format)[0]
+
+
     def _call_cached_op(self, *args):
+        if self._static:
+            self._call_cached_op_static(*args)
         if self._cached_op is None:
             self._build_cache(*args)
 
@@ -545,11 +576,12 @@ class HybridBlock(Block):
         super(HybridBlock, self).register_child(block, name)
         self._clear_cached_op()
 
-    def hybridize(self, active=True, **kwargs):
+    def hybridize(self, active=True, static_memory=False, **kwargs):
         self._active = active
+        self._static = static_memory
         self._flags = kwargs.items()
         self._clear_cached_op()
-        super(HybridBlock, self).hybridize(active, **kwargs)
+        super(HybridBlock, self).hybridize(active, static_memory=static_memory, **kwargs)
 
     def cast(self, dtype):
         self._clear_cached_op()
