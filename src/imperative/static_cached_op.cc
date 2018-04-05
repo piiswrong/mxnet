@@ -149,8 +149,7 @@ bool Imperative::StaticCachedOp::SetupGraph(
   const auto& stypes = g.GetAttr<StorageTypeVector>("storage_type");
   CHECK_EQ(stypes.size(), storage.size());
   for (size_t i = 0; i < stypes.size(); i++) {
-    if (stypes[i] != kDefaultStorage)
-      storage[i] = exec::kDynamicStorageID;
+    if (stypes[i] != kDefaultStorage) storage[i] = exec::kDynamicStorageID;
   }
 
   auto mem_plan = PlanMemory(
@@ -158,6 +157,113 @@ bool Imperative::StaticCachedOp::SetupGraph(
   g.attrs["mem_plan"] = std::make_shared<dmlc::any>(std::move(mem_plan));
 
   return false;
+}
+
+void Imperative::StaticCachedOp::SetupCachedOps(
+    const std::shared_ptr<StaticState>& state) {
+  // get the graph
+  auto& g = state->graph;
+  const auto& idx = g.indexed_graph();
+  const auto& vstorage_inplace = g.GetAttr<std::vector<int> >("storage_inplace_index");
+  const auto& op_execs = g.GetAttr<exec::OpExecVector>("op_execs");
+
+  std::vector<bool> skip_nodes(idx.num_nodes(), false);
+  // setup the array and requirements.
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const auto& inode = idx[nid];
+    if (inode.source->is_variable()) continue;
+    for (const auto& e : inode.inputs) {
+      if (state->arrays[idx.entry_id(e)]->is_none()) {
+        skip_nodes[nid] = true;
+        break;
+      }
+    }
+    if (skip_nodes[nid]) continue;
+
+    auto& exec = op_execs[nid];
+    CHECK_EQ(exec->in_array.size(), 0U);
+    CHECK_EQ(exec->out_array.size(), 0U);
+    for (const auto& e : inode.inputs) {
+      exec->in_array.push_back(*state->arrays[idx.entry_id(e)]);
+    }
+    // detect inplace requirement
+    for (uint32_t index = 0; index < inode.source->num_outputs(); ++index) {
+      uint32_t eid = idx.entry_id(nid, index);
+      exec->out_array.push_back(*state->arrays[eid]);
+      if (vstorage_inplace[eid] >= 0) {
+        exec->req.push_back(kWriteInplace);
+      } else if (vstorage_inplace[eid] == -2) {
+        // -2 indicate that the entry is never referenced.
+        exec->req.push_back(kNullOp);
+      } else {
+        exec->req.push_back(kWriteTo);
+      }
+    }
+  }
+  // Note that this modifies the requirment of kWriteInplace
+  // for (size_t j = num_forward_outputs_; j < idx.outputs().size(); ++j) {
+  //   auto& e = idx.outputs()[j];
+  //   op_nodes_[e.node_id].exec->req[e.index] =
+  //       grad_store_[j - num_forward_outputs_].first;
+  // }
+  state->oprs.resize(idx.num_nodes(), nullptr);
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const auto& inode = idx[nid];
+    if (inode.source->is_variable()) continue;
+    if (skip_nodes[nid]) continue;
+    auto& exec = op_execs[nid];
+    bool is_async = exec->exec_type() == ExecType::kAsync;
+    bool is_gpu = state->context.dev_mask() == gpu::kDevMask;
+
+    // the variables
+    std::vector<Engine::VarHandle> use_vars, mutate_vars;
+    for (const auto& nd : exec->in_array) {
+      use_vars.push_back(nd.var());
+    }
+    for (auto& r : exec->op_ctx.requested) {
+      mutate_vars.push_back(r.var);
+    }
+    for (auto& nd : exec->out_array) {
+      mutate_vars.push_back(nd.var());
+    }
+    if (exec->var() != nullptr) {
+      mutate_vars.push_back(exec->var());
+    }
+    // dedup vars
+    Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
+    // all vars include both mutate vars and use vars
+    std::vector<Engine::VarHandle> all_vars(use_vars);
+    std::copy(mutate_vars.begin(), mutate_vars.end(),
+              std::inserter(all_vars, all_vars.end()));
+    // setup exec vars
+    Engine::Get()->PushAsync(
+      [exec](RunContext rctx, Engine::CallbackOnComplete on_complete) {
+        exec->Setup();
+        on_complete();
+      }, Context::CPU(), {}, all_vars, FnProperty::kNormal, 0, "SetupExec");
+    auto exec_fun = [exec, is_async, is_gpu] (
+        RunContext ctx, Engine::CallbackOnComplete on_complete) {
+      if (is_async) {
+        exec->op_ctx.async_on_complete = on_complete;
+      }
+      exec->Run(ctx, is_gpu);
+      // call on complete only if it is async op
+      if (!is_async) {
+        if (is_gpu) {
+        #if MXNET_USE_CUDA
+          // Wait GPU kernel to finish.
+          ctx.get_stream<gpu>()->Wait();
+        #else
+          LOG(FATAL) << MXNET_GPU_NOT_ENABLED_ERROR;
+        #endif
+        }
+        on_complete();
+      }
+    };
+    // setup the vars
+    state->oprs[nid] = Engine::Get()->NewOperator(
+        exec_fun, use_vars, mutate_vars, FnProperty::kNormal);
+  }
 }
 
 void Imperative::StaticCachedOp::SetupState(
@@ -183,7 +289,9 @@ void Imperative::StaticCachedOp::SetupState(
   state->buff.resize(idx.num_node_entries());
   state->arrays.resize(idx.num_node_entries());
   for (size_t i = 0; i < idx.num_node_entries(); ++i) state->arrays[i] = &state->buff[i];
-  for (const auto& i : idx.input_nodes()) state->arrays[idx.entry_id(i, 0)] = nullptr;
+  for (auto& kv : state->params) {
+    state->arrays[idx.entry_id(idx.input_nodes()[kv.first], 0)] = &kv.second;
+  }
 
   state->array_reqs.clear();
   state->array_reqs.resize(idx.num_node_entries(), kWriteTo);
@@ -194,6 +302,8 @@ void Imperative::StaticCachedOp::SetupState(
   imperative::AllocateMemory(
       g, idx, state->context, 0, idx.num_node_entries(), mem_plan,
       state->arrays, &state->array_reqs);
+
+  SetupCachedOps(state);
 
   state->initialized = true;
 }
@@ -242,6 +352,8 @@ void Imperative::StaticCachedOp::Forward(
   const auto& idx = g.indexed_graph();
 
   Context default_ctx = GetDefaultContext(idx, inputs);
+
+
 }
 
 }  // namespace mxnet

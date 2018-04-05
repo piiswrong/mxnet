@@ -223,7 +223,6 @@ class Imperative {
         const std::shared_ptr<CachedOp>& op_ptr,
         const std::vector<NDArray*>& inputs,
         const std::vector<NDArray*>& outputs) override;
-
     void Backward(const bool retain_graph,
          const OpStatePtr& state,
          const std::vector<NDArray*>& inputs,
@@ -251,7 +250,8 @@ class Imperative {
         nnvm::Graph *graph,
         const bool enable_backward,
         const std::vector<NDArray*>& inputs);
-
+    void SetupCachedOps(
+        const std::shared_ptr<StaticState>& state);
     void SetupState(
         const std::shared_ptr<StaticState>& state,
         const std::vector<NDArray*>& inputs,
