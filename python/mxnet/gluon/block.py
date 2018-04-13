@@ -548,7 +548,7 @@ class HybridBlock(Block):
 
     def _call_cached_op(self, *args):
         if self._static:
-            self._call_cached_op_static(*args)
+            return self._call_cached_op_static(*args)
         if self._cached_op is None:
             self._build_cache(*args)
 

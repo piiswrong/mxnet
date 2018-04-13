@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <iostream>
 #include "./imperative_utils.h"
+#include "../profiler/profiler.h"
 
 namespace mxnet {
 
@@ -275,37 +276,51 @@ void Imperative::StaticCachedOp::SetupState(
 
   Graph& g = state->graph;
 
-  bool match = SetupGraph(&g, param_.enable_backward, inputs);
-  if (match && state->initialized) return;
+  std::vector<NDArray*> full_inputs(fwd_graph_.indexed_graph().input_nodes().size());
+  for (auto& kv : state->params) {
+    full_inputs[kv.first] = &kv.second;
+  }
+  for (index_t i = 0; i < input_idx_.size(); ++i) {
+    full_inputs[input_idx_[i]] = inputs[i];
+  }
 
-  g = exec::AttachOpExecs(g);
-  g = exec::AttachOpResources(g);
+  bool match = SetupGraph(&g, param_.enable_backward, full_inputs);
+  if (!state->initialized || !match) {
+    g = exec::AttachOpExecs(g);
+    g = exec::AttachOpResources(g);
+
+    const auto& idx = g.indexed_graph();
+    const auto& ref_count = g.GetAttr<std::vector<uint32_t> >("ref_count");
+    const auto& mem_plan = g.GetAttr<MemoryPlanVector>("mem_plan");
+
+    state->buff.clear();
+    state->buff.resize(idx.num_node_entries());
+    state->arrays.resize(idx.num_node_entries());
+    for (size_t i = 0; i < idx.num_node_entries(); ++i) state->arrays[i] = &state->buff[i];
+    for (auto& kv : state->params) {
+      state->arrays[idx.entry_id(idx.input_nodes()[kv.first], 0)] = &kv.second;
+    }
+
+    state->array_reqs.clear();
+    state->array_reqs.resize(idx.num_node_entries(), kWriteTo);
+    for (size_t i = 0; i < idx.num_node_entries(); ++i) {
+      if (ref_count[i] == 0) state->array_reqs[i] = kNullOp;
+    }
+
+    imperative::AllocateMemory(
+        g, idx, state->context, 0, idx.num_node_entries(), mem_plan,
+        state->arrays, &state->array_reqs);
+
+    SetupCachedOps(state);
+
+    state->initialized = true;
+  }
 
   const auto& idx = g.indexed_graph();
-  const auto& ref_count = g.GetAttr<std::vector<uint32_t> >("ref_count");
-  const auto& mem_plan = g.GetAttr<MemoryPlanVector>("mem_plan");
-
-  state->buff.clear();
-  state->buff.resize(idx.num_node_entries());
-  state->arrays.resize(idx.num_node_entries());
-  for (size_t i = 0; i < idx.num_node_entries(); ++i) state->arrays[i] = &state->buff[i];
-  for (auto& kv : state->params) {
-    state->arrays[idx.entry_id(idx.input_nodes()[kv.first], 0)] = &kv.second;
+  for (index_t i = 0; i < input_idx_.size(); ++i) {
+    const auto& node = idx.input_nodes()[input_idx_[i]];
+    state->arrays[idx.entry_id(node, 0)] = inputs[i];
   }
-
-  state->array_reqs.clear();
-  state->array_reqs.resize(idx.num_node_entries(), kWriteTo);
-  for (size_t i = 0; i < idx.num_node_entries(); ++i) {
-    if (ref_count[i] == 0) state->array_reqs[i] = kNullOp;
-  }
-
-  imperative::AllocateMemory(
-      g, idx, state->context, 0, idx.num_node_entries(), mem_plan,
-      state->arrays, &state->array_reqs);
-
-  SetupCachedOps(state);
-
-  state->initialized = true;
 }
 
 Context GetDefaultContext(
@@ -324,22 +339,9 @@ Context GetDefaultContext(
 
 void Imperative::StaticCachedOp::Forward(
     const std::shared_ptr<CachedOp>& op_ptr,
-    const std::vector<NDArray*>& partial_inputs,
+    const std::vector<NDArray*>& inputs,
     const std::vector<NDArray*>& outputs) {
-
-  CHECK_EQ(partial_inputs.size(), input_idx_.size())
-      << "CachedOp requires " << input_idx_.size()
-      << " inputs but got " << partial_inputs.size();
-  auto& state = static_states_[partial_inputs[0]->ctx()];
-  std::lock_guard<std::mutex> lock(state->mutex);
-
-  std::vector<NDArray*> inputs(fwd_graph_.indexed_graph().input_nodes().size());
-  for (auto& kv : state->params) {
-    inputs[kv.first] = &kv.second;
-  }
-  for (index_t i = 0; i < input_idx_.size(); ++i) {
-    inputs[input_idx_[i]] = partial_inputs[i];
-  }
+  static auto& createop = nnvm::Op::GetAttr<FCreateOpState>("FCreateOpState");
 
   for (const auto& i : outputs)
     CHECK(i->is_none()) << "out must not be set when using static memory.";
@@ -347,13 +349,66 @@ void Imperative::StaticCachedOp::Forward(
   bool recording = Imperative::Get()->is_recording();
   CHECK(param_.enable_backward || !recording)
       << "Set enable_backward to True to enable gradient calculation.";
+  bool is_training = Imperative::Get()->is_training();
+
+  CHECK_EQ(inputs.size(), input_idx_.size())
+      << "CachedOp requires " << input_idx_.size()
+      << " inputs but got " << inputs.size();
+  auto& state = static_states_[inputs[0]->ctx()];
+  std::lock_guard<std::mutex> lock(state->mutex);
+
   SetupState(state, inputs, outputs);
+
   nnvm::Graph& g = state->graph;
   const auto& idx = g.indexed_graph();
-
   Context default_ctx = GetDefaultContext(idx, inputs);
+  const auto& op_execs = g.GetAttr<exec::OpExecVector>("op_execs");
+  const auto& dispatch_modes = g.GetAttr<DispatchModeVector>("dispatch_mode");
 
+  std::vector<NDArray*> ndinputs, ndoutputs;
+  std::vector<OpReqType> req;
 
+  for (size_t i = 0; i < idx.num_nodes(); ++i) {
+    const nnvm::IndexedGraph::Node& node = idx[i];
+    if (node.source->op() == nullptr) continue;
+    if (state->oprs[i] != nullptr) {
+      bool profiling = profiler::Profiler::Get()->GetState() == profiler::Profiler::kRunning;
+      op_execs[i]->op_ctx.is_train = is_training;
+      Engine::Get()->Push(state->oprs[i], default_ctx, 0, profiling);
+    } else {
+      auto num_outputs = node.source->num_outputs();
+      ndinputs.clear();
+      ndinputs.reserve(node.inputs.size());
+      for (const auto& j : node.inputs) {
+        ndinputs.emplace_back(state->arrays[idx.entry_id(j)]);
+        CHECK(!ndinputs.back()->is_none()) << idx[j.node_id].source->attrs.name << " " << j.index;
+      }
+      ndoutputs.clear();
+      ndoutputs.reserve(num_outputs);
+      req.clear();
+      req.reserve(num_outputs);
+      for (size_t j = 0; j < num_outputs; ++j) {
+        size_t eid = idx.entry_id(i, j);
+        ndoutputs.emplace_back(state->arrays[eid]);
+        req.push_back(state->array_reqs[eid]);
+        CHECK(!ndoutputs.back()->is_none());
+      }
+      const DispatchMode dispatch_mode = dispatch_modes[i];
+      if (createop.count(node.source->op())) {
+        Imperative::Get()->InvokeOp(
+            default_ctx, node.source->attrs, ndinputs, ndoutputs, req,
+            dispatch_mode, op_execs[i]->state());
+      } else {
+        Imperative::Get()->InvokeOp(
+            default_ctx, node.source->attrs, ndinputs, ndoutputs, req,
+            dispatch_mode);
+      }
+    }
+  }
+
+  for (uint32_t i = 0; i < outputs.size(); ++i) {
+    *outputs[i] = *state->arrays[idx.entry_id(idx.outputs()[i])];
+  }
 }
 
 }  // namespace mxnet

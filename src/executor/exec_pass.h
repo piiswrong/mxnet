@@ -82,6 +82,9 @@ class OpExecutor {
   virtual engine::VarHandle var() const {
     return nullptr;
   }
+  virtual OpStatePtr state() const {
+    return OpStatePtr();
+  }
 };
 
 /*!

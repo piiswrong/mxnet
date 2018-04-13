@@ -126,6 +126,10 @@ class StatefulComputeExecutor : public StorageFallbackOpExecutor {
     return state_.get_var();
   }
 
+  OpStatePtr state() const override {
+    return state_;
+  }
+
   explicit StatefulComputeExecutor(const OpStatePtr& state,
                                    const FStatefulCompute& fcompute,
                                    ExecType exec_type,
@@ -157,6 +161,10 @@ class StatefulComputeExExecutor : public OpExecutor {
 
   engine::VarHandle var() const override {
     return state_.get_var();
+  }
+
+  OpStatePtr state() const override {
+    return state_;
   }
 
   explicit StatefulComputeExExecutor(const OpStatePtr& state,
