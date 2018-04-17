@@ -22,7 +22,7 @@
 
 namespace mxnet {
 
-DMLC_REGISTER_PARAMETER(CachedOpParam);
+DMLC_REGISTER_PARAMETER(CachedOpConfig);
 
 Imperative::DynamicCachedOp::DynamicCachedOp(
     const nnvm::Symbol& sym,
@@ -32,7 +32,7 @@ Imperative::DynamicCachedOp::DynamicCachedOp(
   static const std::vector<const Op*> zero_ops{Op::Get("zeros_like"), Op::Get("_zeros")};
   static const auto _copy = Op::Get("_copy");
 
-  param_.Init(kwargs);
+  config_.Init(kwargs);
 
   // construct forward graph
   {
@@ -66,7 +66,7 @@ Imperative::DynamicCachedOp::DynamicCachedOp(
     fwd_graph_.attrs["forward_ref_count"] =
         std::make_shared<dmlc::any>(std::move(ref_count));
 
-    inlining_ = (idx.num_nodes() - idx.input_nodes().size()) <= param_.inline_limit;
+    inlining_ = (idx.num_nodes() - idx.input_nodes().size()) <= config_.inline_limit;
   }
 
   // construct backward graph
@@ -403,7 +403,7 @@ void Imperative::DynamicCachedOp::Forward(
   const auto& dispatch_modes = g.GetAttr<DispatchModeVector>("dispatch_mode");
 
   if (recording && !inlining_) Imperative::Get()->set_is_recording(false);
-  int prev_bulk_size = Engine::Get()->set_bulk_size(param_.forward_bulk_size);
+  int prev_bulk_size = Engine::Get()->set_bulk_size(config_.forward_bulk_size);
 
   Imperative::Get()->RunGraph(
       false, idx, arrays, 0, idx.num_nodes(), std::move(array_reqs),
@@ -485,7 +485,7 @@ void Imperative::DynamicCachedOp::Backward(
 
   const auto& dispatch_modes = g.GetAttr<DispatchModeVector>("dispatch_mode");
 
-  int prev_bulk_size = Engine::Get()->set_bulk_size(param_.backward_bulk_size);
+  int prev_bulk_size = Engine::Get()->set_bulk_size(config_.backward_bulk_size);
 
   Imperative::Get()->RunGraph(
       retain_graph, idx, arrays, num_forward_nodes, idx.num_nodes(),

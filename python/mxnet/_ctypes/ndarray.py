@@ -111,8 +111,8 @@ class CachedOp(object):
             param_names = []
             param_arrays = []
             for name, arrs in params.items():
-                param_names.append(name)
                 param_arrays.extend(arrs)
+                param_names.extend([name] * len(arrs))
 
             check_call(_LIB.MXCreateStaticCachedOp(
                 sym.handle,

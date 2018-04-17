@@ -45,13 +45,13 @@ struct hash<mxnet::Context> {
 
 namespace mxnet {
 /*! \brief CachedOp Parameters */
-struct CachedOpParam : public dmlc::Parameter<CachedOpParam> {
+struct CachedOpConfig : public dmlc::Parameter<CachedOpConfig> {
   uint32_t inline_limit;
   uint32_t forward_bulk_size;
   uint32_t backward_bulk_size;
   bool static_memory;
   bool enable_backward;
-  DMLC_DECLARE_PARAMETER(CachedOpParam) {
+  DMLC_DECLARE_PARAMETER(CachedOpConfig) {
     DMLC_DECLARE_FIELD(inline_limit)
     .set_default(2)
     .describe("Maximum number of operators that can be inlined.");
@@ -117,11 +117,11 @@ class Imperative {
         const std::vector<std::pair<std::string, std::string> >& kwargs,
         const nnvm::Symbol& sym,
         const std::vector<std::string> input_names,
-        const std::unordered_map<std::string, std::vector<NDArray> >& parameters) {
-      CachedOpParam param;
-      param.Init(kwargs);
-      if (param.static_memory) {
-        return std::make_shared<StaticCachedOp>(param, sym, input_names, parameters);
+        const std::unordered_map<std::string, std::vector<NDArray> >& params) {
+      CachedOpConfig config;
+      config.Init(kwargs);
+      if (config.static_memory) {
+        return std::make_shared<StaticCachedOp>(config, sym, input_names, params);
       }
       return std::make_shared<DynamicCachedOp>(sym, kwargs);
     }
@@ -194,7 +194,7 @@ class Imperative {
                                  const std::vector<NDArray*>& inputs);
 
     std::mutex mutex_;
-    CachedOpParam param_;
+    CachedOpConfig config_;
     nnvm::Graph fwd_graph_;
     nnvm::Graph grad_graph_;
     nnvm::Graph full_graph_;
@@ -208,10 +208,10 @@ class Imperative {
   class StaticCachedOp : public CachedOp {
    public:
     StaticCachedOp(
-        const CachedOpParam& param,
+        const CachedOpConfig& config,
         const nnvm::Symbol& sym,
         const std::vector<std::string> input_names,
-        const std::unordered_map<std::string, std::vector<NDArray> >& parameters);
+        const std::unordered_map<std::string, std::vector<NDArray> >& params);
     ~StaticCachedOp() {}
     uint32_t num_inputs() override {
       return fwd_graph_.indexed_graph().input_nodes().size();
@@ -244,13 +244,19 @@ class Imperative {
 
    private:
 
-    class StaticState {
+    struct StaticState {
      public:
-      StaticState(
-        const CachedOpParam& param,
-        const Context& ctx,
-        const nnvm::Graph& graph,
-        const std::vector<uint32_t>& fwd_input_idx);
+      CachedOpConfig config_;
+      Context context_;
+      nnvm::Graph graph_;
+      size_t num_forward_inputs_;
+      size_t num_forward_outputs_;
+      size_t num_forward_nodes_;
+      std::vector<uint32_t> fwd_input_idx_;
+      std::vector<uint32_t> fwd_params_idx_;
+      std::vector<NDArray> params_;
+      std::vector<NDArray> param_grads_;
+
       ~StaticState() {
         std::lock_guard<std::mutex> lock(mutex_);
         Clear();
@@ -260,7 +266,6 @@ class Imperative {
           const std::vector<NDArray*>& outputs);
 
      private:
-
       void Clear();
       bool SetupGraph(
           nnvm::Graph *graph,
@@ -270,11 +275,8 @@ class Imperative {
       void Setup(
           const std::vector<NDArray*>& inputs,
           const std::vector<NDArray*>& outputs);
+
       std::mutex mutex_;
-      CachedOpParam param_;
-      Context context_;
-      nnvm::Graph graph_;
-      std::vector<uint32_t> fwd_input_idx_;
 
       bool initialized_ = false;
       std::vector<NDArray> buff_;
@@ -286,13 +288,14 @@ class Imperative {
     std::shared_ptr<StaticState> GetState(const Context& ctx);
 
     std::mutex mutex_;
-    CachedOpParam param_;
+    CachedOpConfig config_;
     std::unordered_map<Context, std::shared_ptr<StaticState> > static_states_;
     // Changes after constructor
     nnvm::Graph fwd_graph_;
     // Doesn't change after constructor
-    std::unordered_map<Context, std::vector<std::pair<index_t, NDArray> > > parameters_;
     std::vector<uint32_t> fwd_input_idx_;
+    std::vector<uint32_t> fwd_params_idx_;
+    std::unordered_map<Context, std::vector<NDArray> > params_;
   };
   /*! \brief whether operator recording is on. */
   bool is_training() const {
