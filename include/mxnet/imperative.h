@@ -113,6 +113,18 @@ class Imperative {
   };
   class CachedOp {
    public:
+    static std::shared_ptr<CachedOp> Create(
+        const std::vector<std::pair<std::string, std::string> >& kwargs,
+        const nnvm::Symbol& sym,
+        const std::vector<std::string> input_names,
+        const std::unordered_map<std::string, std::vector<NDArray> >& parameters) {
+      CachedOpParam param;
+      param.Init(kwargs);
+      if (param.static_memory) {
+        return std::make_shared<StaticCachedOp>(param, sym, input_names, parameters);
+      }
+      return std::make_shared<DynamicCachedOp>(sym, kwargs);
+    }
     virtual ~CachedOp() {}
     virtual uint32_t num_inputs() = 0;
     virtual uint32_t num_outputs() = 0;
@@ -196,9 +208,8 @@ class Imperative {
   class StaticCachedOp : public CachedOp {
    public:
     StaticCachedOp(
+        const CachedOpParam& param,
         const nnvm::Symbol& sym,
-        const std::vector<std::pair<std::string, std::string> >& kwargs,
-        const std::vector<Context> contexts,
         const std::vector<std::string> input_names,
         const std::unordered_map<std::string, std::vector<NDArray> >& parameters);
     ~StaticCachedOp() {}
@@ -233,36 +244,55 @@ class Imperative {
 
    private:
 
-    struct StaticState {
-      std::mutex mutex;
-      Context context;
-      nnvm::Graph graph;
-      std::vector<std::pair<index_t, NDArray> > params;
+    class StaticState {
+     public:
+      StaticState(
+        const CachedOpParam& param,
+        const Context& ctx,
+        const nnvm::Graph& graph,
+        const std::vector<uint32_t>& fwd_input_idx);
+      ~StaticState() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Clear();
+      }
+      void Forward(
+          const std::vector<NDArray*>& inputs,
+          const std::vector<NDArray*>& outputs);
 
-      bool initialized = false;
-      std::vector<NDArray> buff;
-      std::vector<NDArray*> arrays;
-      std::vector<OpReqType> array_reqs;
-      std::vector<Engine::OprHandle> oprs;
+     private:
+
+      void Clear();
+      bool SetupGraph(
+          nnvm::Graph *graph,
+          const bool enable_backward,
+          const std::vector<NDArray*>& inputs);
+      void SetupCachedOps();
+      void Setup(
+          const std::vector<NDArray*>& inputs,
+          const std::vector<NDArray*>& outputs);
+      std::mutex mutex_;
+      CachedOpParam param_;
+      Context context_;
+      nnvm::Graph graph_;
+      std::vector<uint32_t> fwd_input_idx_;
+
+      bool initialized_ = false;
+      std::vector<NDArray> buff_;
+      std::vector<NDArray*> arrays_;
+      std::vector<OpReqType> array_reqs_;
+      std::vector<Engine::OprHandle> oprs_;
     };
 
-    bool SetupGraph(
-        nnvm::Graph *graph,
-        const bool enable_backward,
-        const std::vector<NDArray*>& inputs);
-    void SetupCachedOps(
-        const std::shared_ptr<StaticState>& state);
-    void SetupState(
-        const std::shared_ptr<StaticState>& state,
-        const std::vector<NDArray*>& inputs,
-        const std::vector<NDArray*>& outputs);
+    std::shared_ptr<StaticState> GetState(const Context& ctx);
 
+    std::mutex mutex_;
     CachedOpParam param_;
     std::unordered_map<Context, std::shared_ptr<StaticState> > static_states_;
     // Changes after constructor
     nnvm::Graph fwd_graph_;
     // Doesn't change after constructor
-    std::vector<uint32_t> input_idx_;
+    std::unordered_map<Context, std::vector<std::pair<index_t, NDArray> > > parameters_;
+    std::vector<uint32_t> fwd_input_idx_;
   };
   /*! \brief whether operator recording is on. */
   bool is_training() const {

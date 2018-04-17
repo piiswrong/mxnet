@@ -105,9 +105,9 @@ def _imperative_invoke(handle, ndargs, keys, vals, out):
 class CachedOp(object):
     """Cached operator handle."""
     __slots__ = ["handle"]
-    def __init__(self, sym, flags=(), contexts=None, inputs=None, params=None):
+    def __init__(self, sym, flags=(), inputs=None, params=None):
         self.handle = CachedOpHandle()
-        if contexts is not None:
+        if inputs is not None:
             param_names = []
             param_arrays = []
             for name, arrs in params.items():
@@ -119,9 +119,6 @@ class CachedOp(object):
                 len(flags),
                 c_str_array([key for key, _ in flags]),
                 c_str_array([str(val) for _, val in flags]),
-                len(contexts),
-                c_array(ctypes.c_int, [i.device_typeid for i in contexts]),
-                c_array(ctypes.c_int, [i.device_id for i in contexts]),
                 len(inputs),
                 c_str_array(inputs),
                 len(params),

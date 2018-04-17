@@ -183,9 +183,6 @@ int MXCreateStaticCachedOp(SymbolHandle handle,
                             int num_params,
                             const char** keys,
                             const char** vals,
-                            int num_contexts,
-                            const int* dev_types,
-                            const int* dev_ids,
                             int num_inputs,
                             const char** input_names,
                             int num_parameters,
@@ -199,25 +196,17 @@ int MXCreateStaticCachedOp(SymbolHandle handle,
   for (int i = 0; i < num_params; ++i) {
     kwargs.push_back({keys[i], vals[i]});
   }
-  std::vector<Context> contexts;
-  for (int i = 0; i < num_contexts; ++i) {
-    contexts.push_back(
-        Context::Create(static_cast<Context::DeviceType>(dev_types[i]), dev_ids[i]));
-  }
   std::vector<std::string> inputs;
   for (int i = 0; i < num_inputs; ++i) {
     inputs.push_back(input_names[i]);
   }
   std::unordered_map<std::string, std::vector<NDArray> > params;
   for (int i = 0; i < num_parameters; ++i) {
-    params[parameter_names[i]] = std::vector<NDArray>();
-    for (int j = 0; j < num_contexts; ++j) {
-      params[parameter_names[i]].emplace_back(
-          *reinterpret_cast<NDArray*>(parameters[i*num_contexts + j]));
-    }
+    params[parameter_names[i]].emplace_back(
+        *reinterpret_cast<NDArray*>(parameters[i]));
   }
   *out = new std::shared_ptr<Imperative::CachedOp>(
-      new Imperative::StaticCachedOp(*sym, kwargs, contexts, inputs, params));
+      Imperative::CachedOp::Create(kwargs, *sym, inputs, params));
   API_END();
 }
 

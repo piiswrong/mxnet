@@ -529,9 +529,7 @@ class HybridBlock(Block):
                 i._finish_deferred_init()
             params = {key: val.list_data() for key, val in self.collect_params().items()}
 
-        ctxs = self.collect_params().items()[0][1].list_ctx()
-
-        self._cached_op = ndarray.CachedOp(out, self._flags, ctxs, input_names, params)
+        self._cached_op = ndarray.CachedOp(out, self._flags, input_names, params)
 
 
     def _call_cached_op_static(self, *args):
@@ -576,12 +574,12 @@ class HybridBlock(Block):
         super(HybridBlock, self).register_child(block, name)
         self._clear_cached_op()
 
-    def hybridize(self, active=True, static_memory=False, **kwargs):
+    def hybridize(self, active=True, **kwargs):
         self._active = active
-        self._static = static_memory
+        self._static = kwargs.get('static_memory', False)
         self._flags = kwargs.items()
         self._clear_cached_op()
-        super(HybridBlock, self).hybridize(active, static_memory=static_memory, **kwargs)
+        super(HybridBlock, self).hybridize(active, **kwargs)
 
     def cast(self, dtype):
         self._clear_cached_op()
