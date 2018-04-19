@@ -72,6 +72,9 @@ bool Imperative::StaticCachedOp::StaticState::SetupGraph(
   for (const auto i : idx.input_nodes()) {
     storage[idx.entry_id(i, 0)] = exec::kExternalStorageID;
   }
+  for (size_t i = num_forward_outputs_; i < idx.outputs().size(); ++i) {
+    storage[idx.entry_id(idx.outputs()[i])] = exec::kExternalStorageID;
+  }
   const auto& stypes = g.GetAttr<StorageTypeVector>("storage_type");
   CHECK_EQ(stypes.size(), storage.size());
   for (size_t i = 0; i < stypes.size(); i++) {
@@ -197,46 +200,38 @@ void Imperative::StaticCachedOp::StaticState::Setup(
   using namespace imperative;
   using namespace nnvm;
 
+  bool match = SetupGraph(&graph_, config_.enable_backward, inputs);
+  if (initialized_ && match) return;
+
   Graph& g = graph_;
-
-  bool match = SetupGraph(&g, config_.enable_backward, inputs);
-
-  if (!initialized_ || !match) {
-    Clear();
-    g = exec::AttachOpExecs(g);
-    g = exec::AttachOpResources(g);
-
-    const auto& idx = g.indexed_graph();
-    const auto& ref_count = g.GetAttr<std::vector<uint32_t> >("ref_count");
-    const auto& mem_plan = g.GetAttr<MemoryPlanVector>("mem_plan");
-
-    buff_.resize(idx.num_node_entries());
-    arrays_.resize(idx.num_node_entries());
-    for (size_t i = 0; i < idx.num_node_entries(); ++i) arrays_[i] = &buff_[i];
-    for (size_t i = 0; i < fwd_params_idx_.size(); ++i) {
-      auto nid = idx.input_nodes()[fwd_params_idx_[i]];
-      arrays_[idx.entry_id(nid, 0)] = &params_[i];
-    }
-
-    array_reqs_.resize(idx.num_node_entries(), kWriteTo);
-    for (size_t i = 0; i < idx.num_node_entries(); ++i) {
-      if (ref_count[i] == 0) array_reqs_[i] = kNullOp;
-    }
-
-    imperative::AllocateMemory(
-        g, idx, context_, 0, idx.num_node_entries(), mem_plan,
-        arrays_, &array_reqs_);
-
-    SetupCachedOps();
-
-    initialized_ = true;
-  }
+  Clear();
+  g = exec::AttachOpExecs(g);
+  g = exec::AttachOpResources(g);
 
   const auto& idx = g.indexed_graph();
-  for (auto i : fwd_args_idx_) {
-    auto eid = idx.entry_id(idx.input_nodes()[i], 0);
-    arrays_[eid] = inputs[i];
+  const auto& ref_count = g.GetAttr<std::vector<uint32_t> >("ref_count");
+  const auto& mem_plan = g.GetAttr<MemoryPlanVector>("mem_plan");
+
+  buff_.resize(idx.num_node_entries());
+  arrays_.resize(idx.num_node_entries());
+  for (size_t i = 0; i < idx.num_node_entries(); ++i) arrays_[i] = &buff_[i];
+  for (size_t i = 0; i < fwd_params_idx_.size(); ++i) {
+    auto nid = idx.input_nodes()[fwd_params_idx_[i]];
+    arrays_[idx.entry_id(nid, 0)] = &params_[i];
   }
+
+  array_reqs_.resize(idx.num_node_entries(), kWriteTo);
+  for (size_t i = 0; i < idx.num_node_entries(); ++i) {
+    if (ref_count[i] == 0) array_reqs_[i] = kNullOp;
+  }
+
+  imperative::AllocateMemory(
+      g, idx, context_, 0, idx.num_node_entries(), mem_plan,
+      arrays_, &array_reqs_);
+
+  SetupCachedOps();
+
+  initialized_ = true;
 }
 
 void Imperative::StaticCachedOp::StaticState::Forward(
@@ -257,6 +252,12 @@ void Imperative::StaticCachedOp::StaticState::Forward(
   const auto& idx = g.indexed_graph();
   const auto& op_execs = g.GetAttr<exec::OpExecVector>("op_execs");
   const auto& dispatch_modes = g.GetAttr<DispatchModeVector>("dispatch_mode");
+
+  const auto& idx = g.indexed_graph();
+  for (auto i : fwd_args_idx_) {
+    auto eid = idx.entry_id(idx.input_nodes()[i], 0);
+    arrays_[eid] = inputs[i];
+  }
 
   std::vector<NDArray*> ndinputs, ndoutputs;
   std::vector<OpReqType> req;
