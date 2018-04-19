@@ -210,7 +210,7 @@ class Imperative {
     StaticCachedOp(
         const CachedOpConfig& config,
         const nnvm::Symbol& sym,
-        const std::vector<std::string> input_names,
+        const std::vector<std::string> arg_names,
         const std::unordered_map<std::string, std::vector<NDArray> >& params);
     ~StaticCachedOp() {}
     uint32_t num_inputs() override {
@@ -227,12 +227,10 @@ class Imperative {
     }
     std::vector<nnvm::NodeEntry> Gradient(
         const nnvm::NodePtr& node,
-        const std::vector<nnvm::NodeEntry>& ograds) override {
-      LOG(FATAL) << "Not implemented.";
-    }
+        const std::vector<nnvm::NodeEntry>& ograds) override;
     void Forward(
         const std::shared_ptr<CachedOp>& op_ptr,
-        const std::vector<NDArray*>& inputs,
+        const std::vector<NDArray*>& args,
         const std::vector<NDArray*>& outputs) override;
     void Backward(const bool retain_graph,
          const OpStatePtr& state,
@@ -252,7 +250,7 @@ class Imperative {
       size_t num_forward_inputs_;
       size_t num_forward_outputs_;
       size_t num_forward_nodes_;
-      std::vector<uint32_t> fwd_input_idx_;
+      std::vector<uint32_t> fwd_args_idx_;
       std::vector<uint32_t> fwd_params_idx_;
       std::vector<NDArray> params_;
       std::vector<NDArray> param_grads_;
@@ -290,11 +288,16 @@ class Imperative {
     std::mutex mutex_;
     CachedOpConfig config_;
     std::unordered_map<Context, std::shared_ptr<StaticState> > static_states_;
-    // Changes after constructor
+
     nnvm::Graph fwd_graph_;
-    // Doesn't change after constructor
-    std::vector<uint32_t> fwd_input_idx_;
+    nnvm::Graph grad_graph_;
+    nnvm::Graph full_graph_;
+    std::vector<nnvm::NodeEntry> ograd_entries_;
+    std::vector<uint32_t> bwd_in_dep_, bwd_out_dep_, bwd_ograd_dep_;
+    std::vector<bool> save_inputs_, save_outputs_;
+    std::vector<uint32_t> fwd_args_idx_;
     std::vector<uint32_t> fwd_params_idx_;
+    std::vector<uint32_t> bwd_param_grad_idx_;
     std::unordered_map<Context, std::vector<NDArray> > params_;
   };
   /*! \brief whether operator recording is on. */
