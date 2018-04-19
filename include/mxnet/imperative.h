@@ -297,7 +297,7 @@ class Imperative {
     std::vector<bool> save_inputs_, save_outputs_;
     std::vector<uint32_t> fwd_args_idx_;
     std::vector<uint32_t> fwd_params_idx_;
-    std::vector<uint32_t> bwd_param_grad_idx_;
+    std::unordered_map<uint32_t, uint32_t> fwd_in_to_bwd_out;
     std::unordered_map<Context, std::vector<NDArray> > params_;
   };
   /*! \brief whether operator recording is on. */

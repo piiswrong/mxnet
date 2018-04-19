@@ -339,6 +339,7 @@ Imperative::StaticCachedOp::StaticCachedOp(
     CHECK_GE(idx.input_nodes().size(), 1) << "CachedOp requires at least 1 input";
 
     std::vector<uint32_t> ref_count(idx.num_node_entries(), 0);
+    // TODO: no need to increment inputs?
     for (const auto& i : idx.input_nodes()) ++ref_count[idx.entry_id(i, 0)];
     for (const auto& i : idx.outputs()) ++ref_count[idx.entry_id(i)];
     for (size_t i = 0; i < idx.num_nodes(); ++i) {
@@ -387,25 +388,16 @@ Imperative::StaticCachedOp::StaticCachedOp(
       ograd_entries_.emplace_back(NodeEntry{Node::Create(), 0, 0});
     }
 
-    std::vector<NodeEntry> xs;
     std::vector<NodePtr> inputs = sym.ListInputs(Symbol::kAll);
-    const auto& mutable_nodes = idx.mutable_input_nodes();
+    std::vector<NodeEntry> xs;
+    xs.reserve(inputs.size());
     const auto& input_nodes = idx.input_nodes();
-    for (auto i : fwd_args_idx_) {
+    const auto& mutable_nodes = idx.mutable_input_nodes();
+    for (uint32_t i = 0; i < input_nodes.size(); ++i) {
       if (mutable_nodes.find(input_nodes[i]) != mutable_nodes.end()) continue;
+      fwd_in_to_bwd_out[i] = xs.size();
       xs.push_back(NodeEntry{inputs[i], 0, 0});
     }
-    if (params_.size()) {
-      for (auto i : fwd_params_idx_) {
-        if (mutable_nodes.find(input_nodes[i]) != mutable_nodes.end()) {
-          bwd_param_grad_idx_.push_back(-1);
-        } else {
-          bwd_param_grad_idx_.push_back(xs.size());
-          xs.push_back(NodeEntry{inputs[i], 0, 0});
-        }
-      }
-    }
-
     CHECK_GT(xs.size(), 0)
         << "There are no inputs in computation graph that require gradients.";
 
@@ -432,6 +424,7 @@ Imperative::StaticCachedOp::StaticCachedOp(
     }
 
     auto full_ref_count = fwd_graph_.GetAttr<std::vector<uint32_t> >("ref_count");
+    // TODO: do this after save_inputs?
     for (size_t i = 0; i < num_forward_entries; ++i) full_ref_count[i] += ref_count[i];
     full_graph_.attrs["ref_count"] =
         std::make_shared<dmlc::any>(std::move(full_ref_count));
