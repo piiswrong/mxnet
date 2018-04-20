@@ -106,6 +106,12 @@ void Imperative::StaticCachedOp::StaticState::SetupCachedOps() {
         break;
       }
     }
+    for (uint32_t i = 0; i < inode.source->num_outputs(); ++i) {
+      if (arrays_[idx.entry_id(nid, i)]->is_none()) {
+        skip_nodes[nid] = true;
+        break;
+      }
+    }
     if (skip_nodes[nid]) continue;
 
     auto& exec = op_execs[nid];
@@ -214,15 +220,24 @@ void Imperative::StaticCachedOp::StaticState::Setup(
 
   buff_.resize(idx.num_node_entries());
   arrays_.resize(idx.num_node_entries());
-  for (size_t i = 0; i < idx.num_node_entries(); ++i) arrays_[i] = &buff_[i];
+  array_reqs_.resize(idx.num_node_entries(), kWriteTo);
+  for (size_t i = 0; i < idx.num_node_entries(); ++i) {
+    if (ref_count[i] == 0) array_reqs_[i] = kNullOp;
+    arrays_[i] = &buff_[i];
+  }
   for (size_t i = 0; i < fwd_params_idx_.size(); ++i) {
     auto nid = idx.input_nodes()[fwd_params_idx_[i]];
     arrays_[idx.entry_id(nid, 0)] = &params_[i];
   }
-
-  array_reqs_.resize(idx.num_node_entries(), kWriteTo);
-  for (size_t i = 0; i < idx.num_node_entries(); ++i) {
-    if (ref_count[i] == 0) array_reqs_[i] = kNullOp;
+  if (config_.enable_backward) {
+    for (size_t i = 0; i < fwd_params_idx_.size(); ++i) {
+      const auto iter = fwd_in_to_bwd_out_.find(fwd_params_idx_[i]);
+      if (iter == fwd_in_to_bwd_out_.end()) continue;
+      LOG(INFO) << iter->second << " " << fwd_params_idx_[i] << " " << idx.outputs().size() << " " << num_forward_outputs_;
+      auto eid = idx.entry_id(idx.outputs()[num_forward_outputs_ + iter->second]);
+      LOG(INFO) << i << " " << eid << " " << arrays_.size() << " " << param_grads_.size();
+      arrays_[eid] = &param_grads_[i];
+    }
   }
 
   imperative::AllocateMemory(
@@ -234,39 +249,23 @@ void Imperative::StaticCachedOp::StaticState::Setup(
   initialized_ = true;
 }
 
-void Imperative::StaticCachedOp::StaticState::Forward(
-    const std::vector<NDArray*>& inputs,
-    const std::vector<NDArray*>& outputs) {
+void Imperative::StaticCachedOp::StaticState::RunOps(
+    bool is_training, size_t start_nid, size_t end_nid) {
   static auto& createop = nnvm::Op::GetAttr<FCreateOpState>("FCreateOpState");
 
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  bool recording = Imperative::Get()->is_recording();
-  CHECK(config_.enable_backward || !recording)
-      << "Set enable_backward to True to enable gradient calculation.";
-  bool is_training = Imperative::Get()->is_training();
-
-  Setup(inputs, outputs);
-
+  bool profiling = profiler::Profiler::Get()->GetState() == profiler::Profiler::kRunning;
   nnvm::Graph& g = graph_;
   const auto& idx = g.indexed_graph();
   const auto& op_execs = g.GetAttr<exec::OpExecVector>("op_execs");
   const auto& dispatch_modes = g.GetAttr<DispatchModeVector>("dispatch_mode");
 
-  const auto& idx = g.indexed_graph();
-  for (auto i : fwd_args_idx_) {
-    auto eid = idx.entry_id(idx.input_nodes()[i], 0);
-    arrays_[eid] = inputs[i];
-  }
-
   std::vector<NDArray*> ndinputs, ndoutputs;
   std::vector<OpReqType> req;
 
-  for (size_t i = 0; i < idx.num_nodes(); ++i) {
+  for (size_t i = start_nid; i < end_nid; ++i) {
     const nnvm::IndexedGraph::Node& node = idx[i];
     if (node.source->op() == nullptr) continue;
     if (oprs_[i] != nullptr) {
-      bool profiling = profiler::Profiler::Get()->GetState() == profiler::Profiler::kRunning;
       op_execs[i]->op_ctx.is_train = is_training;
       Engine::Get()->Push(oprs_[i], context_, 0, profiling);
     } else {
@@ -299,10 +298,50 @@ void Imperative::StaticCachedOp::StaticState::Forward(
       }
     }
   }
+}
+
+void Imperative::StaticCachedOp::StaticState::Forward(
+    const std::vector<NDArray*>& inputs,
+    const std::vector<NDArray*>& outputs) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  bool is_training = Imperative::Get()->is_training();
+
+  Setup(inputs, outputs);
+
+  const auto& idx = graph_.indexed_graph();
+  for (size_t i = 0; i < fwd_args_idx_.size(); ++i) {
+    auto eid = idx.entry_id(idx.input_nodes()[fwd_args_idx_[i]], 0);
+    arrays_[eid] = inputs[i];
+  }
+
+  RunOps(is_training, 0, num_forward_nodes_);
 
   for (uint32_t i = 0; i < outputs.size(); ++i) {
     *outputs[i] = *arrays_[idx.entry_id(idx.outputs()[i])];
   }
+}
+
+void Imperative::StaticCachedOp::StaticState::Backward(
+    const bool retain_graph,
+    const std::vector<NDArray*>& inputs,
+    const std::vector<OpReqType>& reqs,
+    const std::vector<NDArray*>& outputs) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  bool is_training = Imperative::Get()->is_training();
+
+  const auto& idx = graph_.indexed_graph();
+  for (size_t i = 0; i < bwd_input_eid_.size(); ++i) {
+    arrays_[bwd_input_eid_[i]] = inputs[i];
+  }
+  for (size_t i = 0; i < fwd_args_idx_.size(); ++i) {
+    const auto iter = fwd_in_to_bwd_out_.find(fwd_args_idx_[i]);
+    if (iter == fwd_in_to_bwd_out_.end()) continue;
+    auto eid = idx.entry_id(idx.outputs()[num_forward_outputs_ + iter->second]);
+    arrays_[eid] = outputs[iter->second];
+  }
+
+  RunOps(is_training, num_forward_nodes_, idx.num_nodes());
+
 }
 
 Imperative::StaticCachedOp::StaticCachedOp(
@@ -396,7 +435,7 @@ Imperative::StaticCachedOp::StaticCachedOp(
     const auto& mutable_nodes = idx.mutable_input_nodes();
     for (uint32_t i = 0; i < input_nodes.size(); ++i) {
       if (mutable_nodes.find(input_nodes[i]) != mutable_nodes.end()) continue;
-      fwd_in_to_bwd_out[i] = xs.size();
+      fwd_in_to_bwd_out_[i] = xs.size();
       xs.push_back(NodeEntry{inputs[i], 0, 0});
     }
     CHECK_GT(xs.size(), 0)
@@ -456,6 +495,23 @@ Imperative::StaticCachedOp::StaticCachedOp(
       }
     }
   }
+
+  // calc bwd_input_eid_
+  {
+    const auto& idx = full_graph_.indexed_graph();
+    for (const auto& i : bwd_ograd_dep_) {
+      auto eid = idx.entry_id(ograd_entries_[i]);
+      bwd_input_eid_.push_back(eid);
+    }
+    for (const auto& i : bwd_in_dep_) {
+      auto eid = idx.entry_id(idx.input_nodes()[i], 0);
+      bwd_input_eid_.push_back(eid);
+    }
+    for (const auto& i : bwd_out_dep_) {
+      auto eid = idx.entry_id(idx.outputs()[i]);
+      bwd_input_eid_.push_back(eid);
+    }
+  }
 }
 
 Context GetContext(
@@ -487,15 +543,19 @@ Imperative::StaticCachedOp::GetState(
     state->context_ = ctx;
 
     const auto& idx = fwd_graph_.indexed_graph();
-    state->graph_ = fwd_graph_;
-    state->graph_.attrs["context"] = std::make_shared<dmlc::any>(
-        std::vector<Context>(state->graph_.indexed_graph().num_nodes(), ctx));
     state->num_forward_inputs_ = idx.input_nodes().size();
     state->num_forward_outputs_ = idx.outputs().size();
     state->num_forward_nodes_ = idx.num_nodes();
+
+    state->graph_ = config_.enable_backward ? full_graph_ : fwd_graph_;
+    state->graph_.attrs["context"] = std::make_shared<dmlc::any>(
+        std::vector<Context>(state->graph_.indexed_graph().num_nodes(), ctx));
     state->fwd_args_idx_ = fwd_args_idx_;
     state->fwd_params_idx_ = fwd_params_idx_;
+    state->fwd_in_to_bwd_out_ = fwd_in_to_bwd_out_;
+    state->bwd_input_eid_ = bwd_input_eid_;
     state->params_ = param_ptr->second;
+    for (const auto& i : state->params_) state->param_grads_.emplace_back(i.grad());
 
     static_states_[ctx] = state;
     return state;
@@ -512,6 +572,9 @@ void Imperative::StaticCachedOp::Forward(
   CHECK_EQ(args.size(), fwd_args_idx_.size())
       << "CachedOp requires " << fwd_args_idx_.size()
       << " inputs but got " << args.size();
+  bool recording = Imperative::Get()->is_recording();
+  CHECK(config_.enable_backward || !recording)
+      << "Set enable_backward to True to enable gradient calculation.";
 
   Context context = GetContext(fwd_graph_.indexed_graph(), fwd_args_idx_, args);
   auto state = GetState(context);
@@ -525,7 +588,7 @@ void Imperative::StaticCachedOp::Forward(
   }
   state->Forward(inputs, outputs);
 
-  if (Imperative::Get()->is_recording()) {
+  if (recording) {
     nnvm::NodeAttrs attrs;
     attrs.op = nnvm::Op::Get("_CachedOp");
     attrs.name = "_cachedop";
@@ -534,6 +597,19 @@ void Imperative::StaticCachedOp::Forward(
         std::move(attrs), inputs, outputs, OpStatePtr(),
         &save_inputs_, &save_outputs_);
   }
+}
+
+void Imperative::StaticCachedOp::Backward(
+    const bool retain_graph,
+    const OpStatePtr& state,
+    const std::vector<NDArray*>& inputs,
+    const std::vector<OpReqType>& reqs,
+    const std::vector<NDArray*>& outputs) {
+
+  Context context = inputs[0]->ctx();  // TODO: fix
+  auto static_state = GetState(context);
+
+  static_state->Backward(retain_graph, inputs, reqs, outputs);
 }
 
 std::vector<nnvm::NodeEntry> Imperative::StaticCachedOp::Gradient(

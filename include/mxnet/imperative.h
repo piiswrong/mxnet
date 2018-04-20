@@ -236,9 +236,7 @@ class Imperative {
          const OpStatePtr& state,
          const std::vector<NDArray*>& inputs,
          const std::vector<OpReqType>& reqs,
-         const std::vector<NDArray*>& outputs) override {
-      LOG(FATAL) << "Not implemented.";
-    }
+         const std::vector<NDArray*>& outputs) override;
 
    private:
 
@@ -252,6 +250,8 @@ class Imperative {
       size_t num_forward_nodes_;
       std::vector<uint32_t> fwd_args_idx_;
       std::vector<uint32_t> fwd_params_idx_;
+      std::unordered_map<uint32_t, uint32_t> fwd_in_to_bwd_out_;
+      std::vector<uint32_t> bwd_input_eid_;
       std::vector<NDArray> params_;
       std::vector<NDArray> param_grads_;
 
@@ -261,6 +261,11 @@ class Imperative {
       }
       void Forward(
           const std::vector<NDArray*>& inputs,
+          const std::vector<NDArray*>& outputs);
+      void Backward(
+          const bool retain_graph,
+          const std::vector<NDArray*>& inputs,
+          const std::vector<OpReqType>& reqs,
           const std::vector<NDArray*>& outputs);
 
      private:
@@ -273,6 +278,7 @@ class Imperative {
       void Setup(
           const std::vector<NDArray*>& inputs,
           const std::vector<NDArray*>& outputs);
+      void RunOps(bool is_training, size_t start_nid, size_t end_nid);
 
       std::mutex mutex_;
 
@@ -287,6 +293,7 @@ class Imperative {
 
     std::mutex mutex_;
     CachedOpConfig config_;
+    std::unordered_map<Context, std::vector<NDArray> > params_;
     std::unordered_map<Context, std::shared_ptr<StaticState> > static_states_;
 
     nnvm::Graph fwd_graph_;
@@ -294,11 +301,11 @@ class Imperative {
     nnvm::Graph full_graph_;
     std::vector<nnvm::NodeEntry> ograd_entries_;
     std::vector<uint32_t> bwd_in_dep_, bwd_out_dep_, bwd_ograd_dep_;
+    std::vector<uint32_t> bwd_input_eid_;
     std::vector<bool> save_inputs_, save_outputs_;
     std::vector<uint32_t> fwd_args_idx_;
     std::vector<uint32_t> fwd_params_idx_;
-    std::unordered_map<uint32_t, uint32_t> fwd_in_to_bwd_out;
-    std::unordered_map<Context, std::vector<NDArray> > params_;
+    std::unordered_map<uint32_t, uint32_t> fwd_in_to_bwd_out_;
   };
   /*! \brief whether operator recording is on. */
   bool is_training() const {
