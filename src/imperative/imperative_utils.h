@@ -51,10 +51,29 @@ struct EngineOprDeleter {
   }
 };
 
-struct EngineOprSeg {
+struct OpSegment {
   bool skip;
   size_t next_nid;
   std::unique_ptr<engine::Opr, EngineOprDeleter> opr;
+};
+
+struct GraphInfo {
+  nnvm::Graph fwd_graph;
+  nnvm::Graph full_graph;
+  std::vector<OpReqType> bwd_output_reqs;
+  std::vector<uint32_t> bwd_input_eid;
+};
+
+struct GraphRuntime {
+  GraphInfo info;
+
+  std::vector<NDArray> buff;
+  std::vector<NDArray*> arrays;
+  std::vector<OpReqType> array_reqs;
+
+  std::vector<OpSegment> opr_segs;
+  std::vector<OpStatePtr> op_states;
+  std::vector<std::shared_ptr<exec::OpExecutor> > execs;
 };
 
 using MemoryPlanVector = std::vector<MemoryPlanInfo>;
@@ -914,7 +933,7 @@ inline void CreateEngineOpSeg(
     const std::unordered_set<uint32_t>& excludes,
     const std::vector<std::shared_ptr<exec::OpExecutor> >& execs,
     const std::vector<int> skip_plus_node,
-    std::vector<EngineOprSeg> *opr_segs) {
+    std::vector<OpSegment> *opr_segs) {
   size_t seg_start = start_nid;
   std::vector<std::shared_ptr<exec::OpExecutor> > seg_execs;
   for (size_t nid = start_nid; nid < end_nid; ++nid) {
@@ -939,10 +958,10 @@ inline void CreateEngineOpSeg(
     if (stop && nid > seg_start) {
       auto& seg = (*opr_segs)[seg_start];
       if (seg_execs.size()) {
-        seg = EngineOprSeg{false, nid};
+        seg = OpSegment{false, nid};
         seg.opr.reset(CreateEngineOp(default_ctx, seg_execs));
       } else {
-        seg = EngineOprSeg{true, nid, nullptr};
+        seg = OpSegment{true, nid, nullptr};
       }
       seg_start = nid;
       seg_execs.clear();
@@ -952,12 +971,12 @@ inline void CreateEngineOpSeg(
 
     auto& seg = (*opr_segs)[nid];
     if (is_async) {
-      seg = EngineOprSeg{false, nid + 1};
+      seg = OpSegment{false, nid + 1};
       seg.opr.reset(CreateEngineOp(default_ctx, seg_execs));
       seg_execs.clear();
       seg_start = nid + 1;
     } else if (!valid) {
-      seg = EngineOprSeg{false, nid + 1, nullptr};
+      seg = OpSegment{false, nid + 1, nullptr};
       seg_execs.clear();
       seg_start = nid + 1;
     }
@@ -966,10 +985,10 @@ inline void CreateEngineOpSeg(
   if (end_nid > seg_start) {
     auto& seg = (*opr_segs)[seg_start];
     if (seg_execs.size()) {
-      seg = EngineOprSeg{false, end_nid};
+      seg = OpSegment{false, end_nid};
       seg.opr.reset(CreateEngineOp(default_ctx, seg_execs));
     } else {
-      seg = EngineOprSeg{true, end_nid, nullptr};
+      seg = OpSegment{true, end_nid, nullptr};
     }
   }
 }

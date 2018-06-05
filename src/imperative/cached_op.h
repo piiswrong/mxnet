@@ -27,6 +27,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "./imperative_utils.h"
+
 namespace mxnet {
 /*! \brief CachedOp Parameters */
 struct CachedOpConfig : public dmlc::Parameter<CachedOpConfig> {
@@ -104,17 +106,14 @@ class CachedOp {
       const std::vector<NDArray*>& outputs);
 
  private:
-  struct GraphInfo;
-  struct DynamicRuntime;
-  struct CachedOpState;
-
-  OpStatePtr GetCachedOpState(const Context& ctx);
+  OpStatePtr GetCachedOpState(
+      const Context& ctx);
   bool SetForwardGraph(
-      GraphInfo* info,
+      imperative::GraphInfo* info,
       const bool recording,
       const std::vector<NDArray*>& inputs);
   bool SetBackwardGraph(
-      GraphInfo* info,
+      imperative::GraphInfo* info,
       const std::vector<OpReqType>& reqs,
       const std::vector<NDArray*>& inputs,
       bool detect_inplace_addto = false);
