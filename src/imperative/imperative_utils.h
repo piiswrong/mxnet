@@ -57,23 +57,91 @@ struct OpSegment {
   std::unique_ptr<engine::Opr, EngineOprDeleter> opr;
 };
 
-struct GraphInfo {
+struct GraphRange {
+  size_t start_nid;
+  size_t end_nid;
+  size_t start_eid;
+  size_t end_eid;
+};
+
+struct GraphRuntime {
+  enum Direction {
+    kForward,
+    kBackward
+  };
+
+  bool is_recording = false;
+  bool is_training = false;
+  bool fwd_alloc = false;
+  bool bwd_alloc = false;
+  bool fwd_exec_init = false;
+  bool bwd_exec_init = false;
+
   nnvm::Graph fwd_graph;
   nnvm::Graph full_graph;
   std::vector<OpReqType> bwd_output_reqs;
   std::vector<uint32_t> bwd_input_eid;
-};
-
-struct GraphRuntime {
-  GraphInfo info;
 
   std::vector<NDArray> buff;
   std::vector<NDArray*> arrays;
   std::vector<OpReqType> array_reqs;
+  std::vector<bool> dynamic_entries;
 
-  std::vector<OpSegment> opr_segs;
+  std::vector<OpSegment> segs;
   std::vector<OpStatePtr> op_states;
   std::vector<std::shared_ptr<exec::OpExecutor> > execs;
+
+  GraphRange GetRange(const Direction direction) {
+    const auto& fwd_idx = fwd_graph.indexed_graph();
+    if (direction == kForward) {
+      return GraphRange{0, fwd_idx.num_nodes(), 0, fwd_idx.num_node_entries()};
+    } else {
+      const auto& full_idx = full_graph.indexed_graph();
+      return GraphRange{fwd_idx.num_nodes(), full_idx.num_nodes(),
+                        fwd_idx.num_node_entries(), full_idx.num_node_entries()};
+    }
+  }
+
+  void ResetBuff(const Direction direction, bool recording, bool training) {
+    is_recording = recording;
+    is_training = training;
+    bwd_alloc = false;
+    if (direction == kForward) fwd_alloc = false;
+
+    GraphRange range = GetRange(direction);
+    if (buff.size() < range.end_eid) {
+      buff.resize(range.end_eid);
+      array_reqs.resize(range.end_eid);
+      dynamic_entries.resize(range.end_eid);
+      arrays.resize(range.end_eid);
+    }
+    for (size_t i = 0; i < arrays.size(); ++i) {
+      // buff may have been moved when resizing.
+      arrays[i] = &buff[i];
+    }
+    for (size_t i = range.start_eid; i < range.end_eid; ++i) {
+      buff[i] = NDArray();
+      array_reqs[i] = kNullOp;
+      dynamic_entries[i] = false;
+    }
+  }
+
+  void ResetSeg(const Direction direction) {
+    bwd_exec_init = false;
+    if (direction == kForward) fwd_exec_init = false;
+
+    GraphRange range = GetRange(direction);
+    if (segs.size() < range.end_nid) {
+      segs.resize(range.end_nid);
+      op_states.resize(range.end_nid);
+      execs.resize(range.end_nid);
+    }
+    for (size_t i = range.start_nid; i < range.end_nid; ++i) {
+      segs[i] = OpSegment();
+      op_states[i].reset();
+      execs[i].reset();
+    }
+  }
 };
 
 using MemoryPlanVector = std::vector<MemoryPlanInfo>;

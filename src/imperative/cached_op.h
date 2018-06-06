@@ -30,6 +30,7 @@
 #include "./imperative_utils.h"
 
 namespace mxnet {
+namespace imperative {
 /*! \brief CachedOp Parameters */
 struct CachedOpConfig : public dmlc::Parameter<CachedOpConfig> {
   uint32_t inline_limit;
@@ -74,10 +75,10 @@ class CachedOp {
       const std::vector<std::pair<std::string, std::string> >& flags);
   ~CachedOp();
   uint32_t num_inputs() {
-    return fwd_graph_.indexed_graph().input_nodes().size();
+    return num_forward_inputs_;
   }
   uint32_t num_outputs() {
-    return fwd_graph_.outputs.size();
+    return num_forward_outputs_;
   }
   uint32_t num_backward_inputs() {
     return bwd_ograd_dep_.size() + bwd_in_dep_.size() + bwd_out_dep_.size();
@@ -109,11 +110,11 @@ class CachedOp {
   OpStatePtr GetCachedOpState(
       const Context& ctx);
   bool SetForwardGraph(
-      imperative::GraphInfo* info,
+      GraphRuntime* runtime,
       const bool recording,
       const std::vector<NDArray*>& inputs);
   bool SetBackwardGraph(
-      imperative::GraphInfo* info,
+      GraphRuntime* runtime,
       const std::vector<OpReqType>& reqs,
       const std::vector<NDArray*>& inputs,
       bool detect_inplace_addto = false);
@@ -123,24 +124,23 @@ class CachedOp {
       const std::vector<NDArray*>& outputs);
   void DynamicBackward(
       const bool retain_graph,
-      const OpStatePtr& op_state,
+      const OpStatePtr& runtime_ptr,
       const std::vector<NDArray*>& inputs,
       const std::vector<OpReqType>& reqs,
       const std::vector<NDArray*>& outputs);
-  void StaticAllocMemory(
-      const OpStatePtr& state_ptr,
-      bool recording,
-      bool keep_fwd);
-  void StaticInitExec(
-      const OpStatePtr& state_ptr,
-      bool recording,
-      bool keep_fwd);
+  std::multimap<size_t, NDArray> StaticAllocMemory(
+      const Context& default_ctx,
+      GraphRuntime *runtime,
+      const GraphRuntime::Direction direction,
+      std::multimap<size_t, NDArray>&& reuse_pool = std::multimap<size_t, NDArray>());
+  void StaticInitSeg(
+      const Context& default_ctx,
+      GraphRuntime *runtime,
+      const GraphRuntime::Direction direction);
   void StaticRunOps(
       const Context& default_ctx,
-      const nnvm::Graph& g,
-      const OpStatePtr& state_ptr,
-      size_t start_nid,
-      size_t end_nid);
+      GraphRuntime *runtime,
+      const GraphRuntime::Direction direction);
   OpStatePtr StaticForward(
       const Context& default_ctx,
       const std::vector<NDArray*>& inputs,
@@ -157,6 +157,10 @@ class CachedOp {
   nnvm::Graph grad_graph_;
   nnvm::Graph full_graph_;
   bool inlining_;
+  size_t num_forward_nodes_;
+  size_t num_forward_entries_;
+  size_t num_forward_inputs_;
+  size_t num_forward_outputs_;
   std::vector<nnvm::NodeEntry> ograd_entries_;
   std::vector<uint32_t> bwd_in_dep_, bwd_out_dep_, bwd_ograd_dep_;
   std::unordered_map<uint32_t, uint32_t> fwd_input_to_grad_output_;
@@ -169,5 +173,6 @@ class CachedOp {
 
 using CachedOpPtr = std::shared_ptr<CachedOp>;
 
+}  // namespace imperative
 }  // namespace mxnet
 #endif  // MXNET_IMPERATIVE_CACHED_OP_H_

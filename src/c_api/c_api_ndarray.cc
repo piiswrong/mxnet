@@ -154,6 +154,8 @@ int MXImperativeInvokeEx(AtomicSymbolCreator creator,
 
 int MXCreateCachedOp(SymbolHandle handle,
                      CachedOpHandle *out) {
+  using namespace mxnet::imperative;
+
   nnvm::Symbol* sym = static_cast<nnvm::Symbol*>(handle);
 
   API_BEGIN();
@@ -171,6 +173,8 @@ int MXCreateCachedOpEx(SymbolHandle handle,
                        const char** keys,
                        const char** vals,
                        CachedOpHandle *out) {
+  using namespace mxnet::imperative;
+
   nnvm::Symbol* sym = static_cast<nnvm::Symbol*>(handle);
 
   API_BEGIN();
@@ -183,6 +187,8 @@ int MXCreateCachedOpEx(SymbolHandle handle,
 }
 
 int MXFreeCachedOp(CachedOpHandle handle) {
+  using namespace mxnet::imperative;
+
   CachedOpPtr* g = static_cast<CachedOpPtr*>(handle);
   API_BEGIN();
   delete g;
@@ -194,6 +200,8 @@ int MXInvokeCachedOp(CachedOpHandle handle,
                      NDArrayHandle *inputs,
                      int *num_outputs,
                      NDArrayHandle **outputs) {
+  using namespace mxnet::imperative;
+
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
 
   API_BEGIN();
@@ -238,6 +246,8 @@ int MXInvokeCachedOpEx(CachedOpHandle handle,
                        int *num_outputs,
                        NDArrayHandle **outputs,
                        const int **out_stypes) {  // outputs storage types
+  using namespace mxnet::imperative;
+
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   int err = MXInvokeCachedOp(handle, num_inputs, inputs, num_outputs, outputs);
   if (err != 0) return err;
